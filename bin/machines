@@ -313,9 +313,10 @@ def assess(m, config):
     details = []
     row = cells(m, config, details)
     issues = [{"severity": sev, "text": text} for sev, text in details]
-    issues += [{"severity": style, "text": f"{h.lower()}: {text}"}
-               for h, (text, style) in zip(headers(config), row)
-               if style in RANK and h not in EXPLAINED]
+    if "error" not in m:  # the error already says why every cell is empty
+        issues += [{"severity": style, "text": f"{h.lower()}: {text}"}
+                   for h, (text, style) in zip(headers(config), row)
+                   if style in RANK and h not in EXPLAINED]
     worst = max((RANK[i["severity"]] for i in issues), default=0)
     status = "down" if "error" in m else {2: "bad", 1: "warn", 0: "ok"}[worst]
     return {"cells": row, "details": details, "issues": issues, "status": status}

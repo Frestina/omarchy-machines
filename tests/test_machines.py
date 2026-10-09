@@ -169,6 +169,7 @@ class Assess(unittest.TestCase):
         v = machines.assess({"label": "gone", "target": "gone", "hostname": None, "local": False,
                              "error": "timed out after 45s"}, {})
         self.assertEqual(v["status"], "down")
+        self.assertEqual(v["issues"], [{"severity": "bad", "text": "timed out after 45s"}])
 
     def test_optional_columns_follow_config(self):
         self.assertEqual(machines.headers({}), machines.BASE_HEADERS)

@@ -146,7 +146,9 @@ Panel {
     var parts = ["load " + column(machine, "LOAD"), "mem " + column(machine, "MEM"),
                  "disk " + column(machine, "DISK /").split(" ")[0]]
     var updates = column(machine, "UPDATES")
-    if (updates !== "" && updates !== "0") parts.push(updates.replace(" aur", "") + " updates")
+    // The reboot note in this column is also an issue line of its own.
+    updates = updates.replace(" aur", "").replace(", reboot", "")
+    if (updates !== "" && updates !== "0") parts.push(updates + " updates")
     return parts.join(" · ")
   }
 
