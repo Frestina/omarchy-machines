@@ -94,7 +94,8 @@ settings.
 
 The popup opens ssh sessions in a terminal with the window class
 `org.omarchy.ssh`. Two small additions make those sessions easy to tell apart
-from local ones.
+from local ones. **Set up with agent** offers to make both for you, or add them
+yourself:
 
 Give them their own border, in `~/.config/hypr/hyprland.lua`:
 
@@ -104,7 +105,7 @@ o.window("^org\\.omarchy\\.ssh$", { border_color = "rgb(e5c07b) rgba(e5c07b88)" 
 
 Show the machine's name in the prompt over ssh with starship, on each machine
 you connect to. In its `~/.config/starship.toml`, add `$hostname` at the start
-of `format`, then:
+of `format` (Omarchy's default `format` leaves it out), then:
 
 ```toml
 [hostname]

@@ -11,7 +11,9 @@ regardless:
 
 - Write only `~/.config/omarchy-machines/hosts` and
   `~/.config/omarchy-machines/config` (under `$XDG_CONFIG_HOME` if it is set).
-  Both already exist; edit them in place and keep their comments.
+  Both already exist; edit them in place and keep their comments. Only if the
+  user accepts the additions in [Know where you are](#know-where-you-are), also
+  `~/.config/hypr/hyprland.lua` and `~/.config/starship.toml` on this machine.
 - Read anything else you need, but change nothing else: not `~/.ssh/config`,
   keys, `known_hosts`, agents or any other machine. If something there needs
   fixing, explain what and why, and let the user do it or ask them first.
@@ -73,5 +75,56 @@ Comments in the file explain each one.
 5. Run the plugin's `bin/machines` (the user's prompt gives its full path) to
    show the result, and explain any machine that is not OK. The widget checks
    again by itself when either file is saved.
-6. Finish with what you changed, and that both files can be edited later from
+6. Offer the additions in [Know where you are](#know-where-you-are), and make
+   the ones the user wants.
+7. Finish with what you changed, and that both files can be edited later from
    the widget's popup.
+
+## Know where you are
+
+Clicking a machine in the popup opens an ssh session in a terminal with the
+window class `org.omarchy.ssh`. Two optional additions make those sessions
+easy to tell apart from local ones. Explain both, and ask which the user wants.
+
+**A border of their own** for those windows, on this machine. Skip it if
+`~/.config/hypr/hyprland.lua` already has a rule for `org.omarchy.ssh`.
+Otherwise append, at the end of that file:
+
+```lua
+-- ssh sessions opened from the Machines bar widget: their own border colour
+-- (active, then inactive) so a remote shell stands out.
+o.window("^org\\.omarchy\\.ssh$", { border_color = "rgb(e5c07b) rgba(e5c07b88)" })
+```
+
+Ask whether amber suits them; any colour works. Hyprland reloads the file
+when it is saved. Then run `hyprctl configerrors`, and if it reports a
+problem, undo your change and tell the user.
+
+**The machine's name in the prompt** over ssh, with starship. This shows on
+the machine being connected to, so here it helps when the user connects to
+this machine from another one. Edit `~/.config/starship.toml` only if
+`starship` is installed and the file exists:
+
+- If `format` is set and has no `$hostname`, put `$hostname` at its start.
+  Omarchy's default `format` leaves it out. Without a `format`, starship's
+  default already includes it.
+- Add, or merge into an existing `[hostname]` table:
+
+  ```toml
+  [hostname]
+  ssh_only = true
+  format = "[$hostname]($style) "
+  style = "bold yellow"
+  ```
+
+- If labels in the hosts file differ from hostnames, offer
+  `[hostname.aliases]` (`<hostname> = "<label>"`) so the prompt uses the same
+  names as the widget.
+- Run `starship prompt >/dev/null` to check the file still parses; undo your
+  change if it does not.
+- If `~/.config/starship.toml` is a symlink, say where it points. In a
+  dotfiles repository, the change reaches the other machines through it once
+  committed; don't commit for the user.
+
+For the other machines, give the user the same steps to do there, or to run
+this setup there too. Don't change them yourself.
