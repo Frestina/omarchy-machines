@@ -1,12 +1,28 @@
 {
-  "status": "not-run",
-  "input_commit": null,
-  "date": null,
-  "platform": null,
-  "omarchy_version": null,
-  "commands": [],
-  "results": [],
+  "status": "passed",
+  "input_commit": "63dcaf2c45c00cc720a4b7af381e479474d2ca11",
+  "date": "2026-10-09",
+  "platform": "Arch Linux x86_64, Hyprland 0.56.2, one 2560x1600 monitor at scale 2",
+  "omarchy_version": "4.0.3-1",
+  "commands": [
+    "./tests/run",
+    "omarchy plugin validate .",
+    "omarchy plugin add <local clone> --enable --yes",
+    "qs ipc call io.github.frestina.machines open / close / refresh",
+    "omarchy-launch-floating-terminal-with-presentation <plugin>/bin/machines (right-click action)",
+    "omarchy plugin update io.github.frestina.machines --yes && omarchy restart shell",
+    "demo/run (fictional fixture preview)"
+  ],
+  "results": [
+    "Installed from git and enabled into the bar without errors.",
+    "Popup listed four real machines, one local and three over ssh, with the optional agent and dotfiles checks configured.",
+    "Right-click table ran the bundled script from the plugin folder.",
+    "Update pulled the new commit; new QML loaded after omarchy restart shell.",
+    "Missing hosts file, unknown config key and unreachable host give explicit errors (unit and end-to-end tests).",
+    "preview.png captured from the installed widget showing only demo/fixtures data; the real cache was restored."
+  ],
   "limitations": [
-    "No live Omarchy desktop acceptance recorded."
+    "Tested on x86_64 with a horizontal bar on one monitor; vertical bars and several monitors were not re-tested for this release.",
+    "omarchy plugin remove not yet run against this release."
   ]
 }
