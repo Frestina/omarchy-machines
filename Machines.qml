@@ -10,7 +10,9 @@ import qs.Ui
 // and display text in --json; this widget only shows it.
 //
 // left = popup · middle = refresh now · right = full table in a terminal.
-// Clicking a machine in the popup opens an ssh session to it.
+// Clicking a machine in the popup opens an ssh session to it. The popup's
+// footer edits the hosts file and settings, or hands the setup to an agent;
+// saving either file checks again.
 Panel {
   id: root
   moduleName: "io.github.frestina.machines"
@@ -30,7 +32,14 @@ Panel {
   property real pendingSince: 0
 
   readonly property string command: decodeURIComponent(Qt.resolvedUrl("bin/machines").toString().replace(/^file:\/\//, ""))
+  // Matches CONFIG_DIR in bin/machines, which creates both files on first run.
+  readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/omarchy-machines"
   readonly property int refreshSec: Math.max(60, Number(setting("refreshIntervalSec", 600)) || 600)
+
+  // Nothing listed yet but the machine this runs on.
+  readonly property bool onlyThisMachine: error === "" && machines.length > 0 && machines.every(function(m) { return m.local })
+  // When the hosts file or settings were saved (Unix seconds); see filesChanged.
+  property real savedAt: 0
 
   readonly property var needAttention: machines.filter(function(m) {
     return m.view && m.view.status !== "ok"
@@ -118,6 +127,13 @@ Panel {
     if (root.bar) root.bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(root.command))
   }
 
+  // --edit hosts|config, --setup-with-agent: the script opens the editor or agent.
+  function runCommand(args) {
+    if (!root.bar) return
+    root.close()
+    root.bar.run([root.command].concat(args).map(Util.shellQuote).join(" "))
+  }
+
   function ssh(machine) {
     if (!root.bar || machine.local) return
     root.close()
@@ -178,6 +194,34 @@ Panel {
     onRunningChanged: if (!running) root.finish()
     stdout: StdioCollector { id: out; waitForEnd: true }
     stderr: StdioCollector { id: errOut; waitForEnd: true }
+  }
+
+  // Every monitor's copy sees the save; collecting only if no collection
+  // started after it lets them share one, like refreshNow().
+  function fileSaved() {
+    if (!saveSettle.running) root.savedAt = Date.now() / 1000
+    saveSettle.restart()
+  }
+
+  FileView {
+    path: root.configDir + "/hosts"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: root.fileSaved()
+  }
+
+  FileView {
+    path: root.configDir + "/config"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: root.fileSaved()
+  }
+
+  // Editors save in several steps; check once they are done.
+  Timer {
+    id: saveSettle
+    interval: 500
+    onTriggered: root.refreshSince(root.savedAt)
   }
 
   Timer {
@@ -400,6 +444,59 @@ Panel {
           color: root.dim(0.45)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          visible: root.onlyThisMachine
+          width: parent.width
+          textFormat: Text.PlainText
+          text: "Only this machine is listed so far. Add your others to the list, or let your coding agent find them with you."
+          wrapMode: Text.Wrap
+          horizontalAlignment: Text.AlignHCenter
+          color: root.dim(0.6)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        PanelSeparator { foreground: root.barForeground }
+
+        // ---------- Footer: the two files · agent setup ----------
+        RowLayout {
+          width: parent.width
+          spacing: Style.space(4)
+
+          Button {
+            iconText: "󰏫"
+            text: "Machines"
+            tooltipText: "Edit the list of machines"
+            foreground: root.barForeground
+            fontFamily: root.bar.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.runCommand(["--edit", "hosts"])
+          }
+
+          Button {
+            iconText: "󰒓"
+            text: "Settings"
+            tooltipText: "Edit the optional settings"
+            foreground: root.barForeground
+            fontFamily: root.bar.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.runCommand(["--edit", "config"])
+          }
+
+          Item { Layout.fillWidth: true }
+
+          Button {
+            iconText: "󰚩"
+            text: "Set up with agent"
+            tooltipText: "Your default coding agent finds your machines and fills in the list with you"
+            foreground: root.barForeground
+            fontFamily: root.bar.fontFamily
+            fontSize: Style.font.bodySmall
+            bordered: root.onlyThisMachine
+            onClicked: root.runCommand(["--setup-with-agent"])
+          }
         }
       }
     }

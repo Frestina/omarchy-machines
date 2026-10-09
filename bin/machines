@@ -7,7 +7,7 @@ reboot needed, failed systemd units and crashes in the last 7 days. Two
 optional checks, an SSH agent and a dotfiles repository, are switched on in
 the config file.
 
-Machines are listed in ~/.config/machines/hosts, one per line:
+Machines are listed in ~/.config/omarchy-machines/hosts, one per line:
 
     <label>  <ssh target>  [<hostname>]
 
@@ -15,7 +15,7 @@ The line whose hostname matches this machine, or whose target is "local", runs
 locally, so the same file works from any of them. Everything else is reached
 with `ssh <target>`, so your ~/.ssh/config decides users, keys and ports.
 
-Optional settings go in ~/.config/machines/config as `key = value` lines:
+Optional settings go in ~/.config/omarchy-machines/config as `key = value` lines:
 
     ssh_options = -o IdentityAgent=none    extra options for polling ssh
     agent_socket = ~/.ssh/agent.sock       SSH agent to check on this machine
@@ -25,7 +25,13 @@ Optional settings go in ~/.config/machines/config as `key = value` lines:
 Polling never forwards your agent and never prompts (BatchMode), so a machine
 that needs a password or key approval shows as unreachable.
 
+Both files are created on the first run if they are missing: the hosts file
+with this machine in it, the config with every setting commented out. Existing
+files are never replaced.
+
 Usage: machines [--json [--max-age SECONDS | --since EPOCH]] [LABEL...]
+       machines --edit hosts|config
+       machines --setup-with-agent
 
 --json adds a "view" to each machine: its status (ok, warn, bad, down), the
 issues behind it and the table's display text. The bar widget shows that, so
@@ -35,12 +41,18 @@ the rules for what counts as a problem live only here.
 The bar runs one widget per monitor; a lock makes them share one collection.
 --since reuses it only if that collection started at or after EPOCH (Unix
 seconds), so a refresh-now sent to every monitor's widget collects once.
+
+--edit opens one of the two files in Omarchy's default editor.
+
+--setup-with-agent starts your default coding agent (`omarchy agent`) with the
+guide in docs/AGENT_SETUP.md, to fill in the hosts file and settings with you.
 """
 
 import fcntl
 import json
 import os
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -48,10 +60,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "machines"
+# A name of our own: ~/.config/machines could belong to anything.
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "omarchy-machines"
 HOSTS_FILE = CONFIG_DIR / "hosts"
 CONFIG_FILE = CONFIG_DIR / "config"
-CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "machines"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "omarchy-machines"
+# The plugin folder; resolve() follows a ~/.local/bin/machines link back here.
+PLUGIN_DIR = Path(__file__).resolve().parent.parent
 TIMEOUT = 45  # checkupdates and the AUR query hit the network
 CONFIG_KEYS = {"ssh_options", "agent_socket", "forwarded_agent_socket", "dotfiles"}
 
@@ -115,6 +130,30 @@ BASE_SSH_OPTS = [
 ]
 
 # --- configuration ------------------------------------------------------------
+
+
+def seed_hosts():
+    """The example's explanation, then this machine, found by its hostname so
+    the file still works when copied to the other machines."""
+    name = socket.gethostname()
+    return ((PLUGIN_DIR / "examples" / "hosts").read_text()
+            + f"\n# This machine. The third column matches it by hostname, so this file\n"
+            f"# also works when copied to your other machines.\n{name.split('.')[0]}  {name}  {name}\n")
+
+
+def ensure_files():
+    """Create the settings folder and whichever of its files is missing, never
+    replacing one that exists. Returns the files it created."""
+    created = []
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    for path, text in ((HOSTS_FILE, seed_hosts), (CONFIG_FILE, (PLUGIN_DIR / "examples" / "config").read_text)):
+        try:
+            with open(path, "x") as f:
+                f.write(text())
+        except FileExistsError:
+            continue
+        created.append(path)
+    return created
 
 
 def read_hosts():
@@ -386,10 +425,51 @@ def cached_json(hosts, config, max_age, since=None):
     return 0
 
 
+# --- actions -------------------------------------------------------------------
+
+
+def editor_command(path, inline):
+    """Omarchy's default editor, in this terminal when there is one."""
+    if shutil.which("omarchy-launch-editor"):
+        return ["omarchy-launch-editor", *(["--inline"] if inline else []), str(path)]
+    return [*shlex.split(os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"), str(path)]
+
+
+def agent_command():
+    """The default coding agent with the setup guide, or Omarchy's agent picker
+    when none is chosen yet."""
+    agent = subprocess.run(["omarchy-default-agent"], capture_output=True, text=True).stdout.strip()
+    if not agent:
+        return ["omarchy-menu", "summon", "setup.default.agent"]
+    return ["omarchy-agent-prompt",
+            f"Help me set up the Machines bar widget: follow {PLUGIN_DIR / 'docs' / 'AGENT_SETUP.md'}. "
+            f"Its command is {PLUGIN_DIR / 'bin' / 'machines'}."]
+
+
 def main(argv):
     if "-h" in argv or "--help" in argv:
         print(__doc__.strip())
         return 0
+    try:
+        ensure_files()
+    except OSError as e:
+        print(f"machines: cannot create {CONFIG_DIR}: {e.strerror}", file=sys.stderr)
+        return 2
+    if "--edit" in argv:
+        what = argv[argv.index("--edit") + 1:][:1]
+        if what not in (["hosts"], ["config"]):
+            print("machines: --edit takes hosts or config", file=sys.stderr)
+            return 2
+        cmd = editor_command(HOSTS_FILE if what == ["hosts"] else CONFIG_FILE, sys.stdin.isatty())
+        os.execvp(cmd[0], cmd)
+    if "--setup-with-agent" in argv:
+        if not shutil.which("omarchy-agent-prompt"):
+            print("machines: --setup-with-agent needs Omarchy's `omarchy agent`", file=sys.stderr)
+            return 2
+        cmd = agent_command()
+        if cmd[0] == "omarchy-menu" and shutil.which("notify-send"):
+            subprocess.run(["notify-send", "Machines", "Pick a default coding agent, then choose Set up again."])
+        os.execvp(cmd[0], cmd)
     as_json = "--json" in argv
     max_age = since = None
     try:
@@ -408,9 +488,6 @@ def main(argv):
     try:
         config = read_config()
         hosts = read_hosts()
-    except FileNotFoundError:
-        print(f"machines: no machines configured yet; list them in {HOSTS_FILE}", file=sys.stderr)
-        return 2
     except ValueError as e:
         print(f"machines: {e}", file=sys.stderr)
         return 2
@@ -418,7 +495,8 @@ def main(argv):
         return cached_json(hosts, config, max_age, since)
     hosts = [h for h in hosts if not wanted or h["label"] in wanted]
     if not hosts:
-        print(f"machines: no machines matched; list them in {HOSTS_FILE}", file=sys.stderr)
+        print(f"machines: {'no machines matched' if wanted else 'no machines listed'}; "
+              f"list them in {HOSTS_FILE}", file=sys.stderr)
         return 2
     machines = collect_all(hosts, config)
     if as_json:

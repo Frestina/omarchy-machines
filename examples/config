@@ -1,4 +1,4 @@
-# Optional settings for `machines`. Every line can be left out.
+# Optional settings for `machines`. Remove the # in front of a setting to turn it on.
 
 # Extra options for the ssh connections used for polling. Polling already
 # uses BatchMode (never prompts) and never forwards your agent.

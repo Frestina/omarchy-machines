@@ -16,6 +16,9 @@ a table in the terminal.
 - **Middle-click** (or <kbd>r</kbd> in the popup): check now.
 - **Right-click:** the full table in a floating terminal.
 
+The bottom of the popup opens your list of machines and the settings in your
+editor, and can hand the setup to your coding agent.
+
 ## What it checks
 
 | Column | Warns when |
@@ -43,18 +46,27 @@ ssh error.
 omarchy plugin add https://github.com/Frestina/omarchy-machines --enable
 ```
 
-Then list your machines, starting from the example:
+On its first run the widget creates `~/.config/omarchy-machines/` with two
+files, and never replaces them once they exist:
 
-```bash
-mkdir -p ~/.config/machines
-cp ~/.config/omarchy/plugins/io.github.frestina.machines/examples/hosts ~/.config/machines/hosts
-$EDITOR ~/.config/machines/hosts
-```
+- `hosts`: your machines, starting with the one you are on.
+- `config`: the [optional settings](#optional-settings), all switched off.
 
-Each line is `<label> <ssh target> [<hostname>]`. The target is whatever you
-would type after `ssh`. The line whose hostname matches the machine you are on,
-or whose target is `local`, is checked locally without ssh, so you can copy the
-same file to every machine.
+Add your other machines with **Machines** at the bottom of the popup, which
+opens the list in your editor. Each line is `<label> <ssh target>
+[<hostname>]`. The target is whatever you would type after `ssh`. The line
+whose hostname matches the machine you are on, or whose target is `local`, is
+checked locally without ssh, so you can copy the same file to every machine.
+The widget checks again whenever you save.
+
+### Or let your agent do it
+
+**Set up with agent** starts your default coding agent (`omarchy agent`; pick
+one in the Omarchy menu if you haven't) with [a setup guide](docs/AGENT_SETUP.md).
+It reads your `~/.ssh/config`, suggests machines, tests them with your
+permission and fills in both files with you. Omarchy starts agents with their
+approval prompts switched off, so the guide limits the agent to writing those
+two files and asks before it connects anywhere.
 
 To use the `machines` command in a terminal:
 
@@ -64,7 +76,9 @@ ln -s ~/.config/omarchy/plugins/io.github.frestina.machines/bin/machines ~/.loca
 
 ## Optional settings
 
-Put these in `~/.config/machines/config`; see [examples/config](examples/config).
+Open them with **Settings** at the bottom of the popup, and remove the `#` in
+front of a setting to turn it on. They are kept in
+`~/.config/omarchy-machines/config`, as in [examples/config](examples/config).
 
 | Setting | Effect |
 | --- | --- |
@@ -105,9 +119,13 @@ style = "bold yellow"
 - That runs a read-only shell script on each machine: locally with `bash`, on
   the others with `ssh -T -o BatchMode=yes -o ConnectTimeout=4 -o
   ForwardAgent=no`. It reads system state and changes nothing.
-- The last result is cached in `~/.cache/machines/`.
-- Your machine list and settings stay in `~/.config/machines/` on your
+- It creates `~/.config/omarchy-machines/hosts` and `config` if they are
+  missing, and edits nothing after that.
+- The last result is cached in `~/.cache/omarchy-machines/`.
+- Your machine list and settings stay in `~/.config/omarchy-machines/` on your
   machine; nothing is sent anywhere else.
+- **Set up with agent** runs `omarchy agent` with your default coding agent,
+  which sends what it reads to that agent's provider like any other session.
 
 ## Update
 
@@ -126,8 +144,8 @@ omarchy plugin remove io.github.frestina.machines
 ```
 
 Your settings and cache are left in place. Delete them with
-`rm -r ~/.config/machines ~/.cache/machines`, and `~/.local/bin/machines` if you
-linked it.
+`rm -r ~/.config/omarchy-machines ~/.cache/omarchy-machines`, and
+`~/.local/bin/machines` if you linked it.
 
 ## Development
 

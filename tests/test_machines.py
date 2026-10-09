@@ -179,6 +179,49 @@ class Assess(unittest.TestCase):
         self.assertEqual(v["status"], "warn")
 
 
+class FirstRun(ConfigDir):
+    def test_creates_both_files_with_this_machine(self):
+        with mock.patch("socket.gethostname", return_value="box.example"):
+            self.assertEqual(machines.ensure_files(), [self.base / "hosts", self.base / "config"])
+            self.assertEqual(machines.read_hosts(), [{"label": "box", "target": "box.example", "hostname": "box.example"}])
+            self.assertTrue(machines.is_local(machines.read_hosts()[0]))
+        self.assertEqual(machines.read_config(), {})
+
+    def test_never_replaces_existing_files(self):
+        (self.base / "hosts").write_text("mine local\n")
+        self.assertEqual(machines.ensure_files(), [self.base / "config"])
+        self.assertEqual((self.base / "hosts").read_text(), "mine local\n")
+        self.assertEqual(machines.ensure_files(), [])
+
+    def test_examples_are_fictional_and_switched_off(self):
+        (self.base / "hosts").write_text((machines.PLUGIN_DIR / "examples" / "hosts").read_text())
+        self.assertEqual(machines.read_hosts(), [])
+
+
+class Actions(unittest.TestCase):
+    def test_editor_is_omarchys_inline_in_a_terminal(self):
+        with mock.patch("shutil.which", return_value="/usr/bin/omarchy-launch-editor"):
+            self.assertEqual(machines.editor_command("/f", inline=True), ["omarchy-launch-editor", "--inline", "/f"])
+            self.assertEqual(machines.editor_command("/f", inline=False), ["omarchy-launch-editor", "/f"])
+
+    def test_editor_falls_back_to_editor_variable(self):
+        with mock.patch("shutil.which", return_value=None), \
+                mock.patch.dict(os.environ, {"VISUAL": "", "EDITOR": "code -w"}):
+            self.assertEqual(machines.editor_command("/f", inline=True), ["code", "-w", "/f"])
+
+    def test_agent_gets_the_guide(self):
+        chosen = subprocess.CompletedProcess([], 0, stdout="claude\n")
+        with mock.patch("subprocess.run", return_value=chosen):
+            cmd = machines.agent_command()
+        self.assertEqual(cmd[0], "omarchy-agent-prompt")
+        self.assertIn(str(machines.PLUGIN_DIR / "docs" / "AGENT_SETUP.md"), cmd[1])
+        self.assertTrue((machines.PLUGIN_DIR / "docs" / "AGENT_SETUP.md").is_file())
+
+    def test_no_default_agent_opens_the_picker(self):
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout="")):
+            self.assertEqual(machines.agent_command(), ["omarchy-menu", "summon", "setup.default.agent"])
+
+
 class Cache(ConfigDir):
     def test_max_age_shares_one_collection(self):
         hosts = [{"label": "a", "target": "local", "hostname": None}]
@@ -194,19 +237,35 @@ class Cache(ConfigDir):
 class EndToEnd(unittest.TestCase):
     """Runs the real collector on this machine through the CLI."""
 
-    def run_cli(self, *args, hosts=None):
+    def run_cli(self, *args, hosts=None, files=None):
         with tempfile.TemporaryDirectory() as tmp:
             if hosts is not None:
-                os.makedirs(f"{tmp}/machines")
-                Path(f"{tmp}/machines/hosts").write_text(hosts)
+                os.makedirs(f"{tmp}/omarchy-machines")
+                Path(f"{tmp}/omarchy-machines/hosts").write_text(hosts)
             env = {**os.environ, "XDG_CONFIG_HOME": tmp, "XDG_CACHE_HOME": f"{tmp}/cache"}
-            return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True,
-                                  text=True, env=env, timeout=120)
+            p = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True,
+                               text=True, env=env, timeout=120)
+            if files is not None:
+                files.update({f.name: f.read_text() for f in Path(f"{tmp}/omarchy-machines").iterdir()})
+            return p
 
-    def test_missing_hosts_file_explains_itself(self):
-        p = self.run_cli("--json", "--max-age", "60")
+    def test_first_run_checks_this_machine(self):
+        files = {}
+        p = self.run_cli("--json", "--max-age", "60", files=files)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        [m] = json.loads(p.stdout)
+        self.assertTrue(m["local"])
+        self.assertEqual(sorted(files), ["config", "hosts"])
+
+    def test_empty_hosts_file_explains_itself(self):
+        p = self.run_cli("--json", "--max-age", "60", hosts="# nothing yet\n")
         self.assertEqual(p.returncode, 2)
-        self.assertIn("no machines configured yet", p.stderr)
+        self.assertIn("no machines listed", p.stderr)
+
+    def test_edit_rejects_other_files(self):
+        p = self.run_cli("--edit", "secrets", hosts="")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("hosts or config", p.stderr)
 
     def test_local_json(self):
         p = self.run_cli("--json", hosts="here local\n")
