@@ -12,7 +12,8 @@ regardless:
 - Write only `~/.config/omarchy-machines/hosts` and
   `~/.config/omarchy-machines/config` (under `$XDG_CONFIG_HOME` if it is set).
   Both already exist; edit them in place and keep their comments. Only if the
-  user accepts the additions in [Know where you are](#know-where-you-are), also
+  user accepts them: the link for [the terminal command](#the-terminal-command),
+  and for [Know where you are](#know-where-you-are)
   `~/.config/hypr/hyprland.lua` and `~/.config/starship.toml` on this machine.
 - Read anything else you need, but change nothing else: not `~/.ssh/config`,
   keys, `known_hosts`, agents or any other machine. If something there needs
@@ -75,10 +76,44 @@ Comments in the file explain each one.
 5. Run the plugin's `bin/machines` (the user's prompt gives its full path) to
    show the result, and explain any machine that is not OK. The widget checks
    again by itself when either file is saved.
-6. Offer the additions in [Know where you are](#know-where-you-are), and make
+6. Offer [the terminal command](#the-terminal-command).
+7. Offer the additions in [Know where you are](#know-where-you-are), and make
    the ones the user wants.
-7. Finish with what you changed, and that both files can be edited later from
-   the widget's popup.
+8. Finish with a summary the user can keep:
+   - What you changed, file by file.
+   - That both settings files can be edited later from the widget's popup.
+   - What removing the plugin leaves behind, and how to delete it. Removing
+     it (`omarchy plugin remove io.github.frestina.machines`) leaves
+     `~/.config/omarchy-machines` and `~/.cache/omarchy-machines`, plus
+     everything from this session outside the plugin: the
+     `~/.local/bin/machines` link (delete it, or it points nowhere), the
+     `org.omarchy.ssh` rule in `hyprland.lua` (quote its comment line so it
+     can be found), and the starship change (which still works without the
+     plugin, so it can stay). List only what you actually made.
+
+## The terminal command
+
+The plugin's `bin/machines` prints the same check as a table in the terminal,
+but it isn't on the user's `PATH` until it is linked. Explain this and offer
+to link it:
+
+```bash
+ln -s <plugin folder>/bin/machines ~/.local/bin/machines
+```
+
+Use the full path from the user's prompt; the link follows the plugin when
+it is updated. Before linking:
+
+- If `~/.local/bin/machines` exists and already points at this plugin's
+  `bin/machines`, there is nothing to do.
+- If it exists as anything else, leave it alone and tell the user; don't
+  replace it, and don't use `ln -f`.
+- If `command -v machines` finds a different `machines` earlier on `PATH`,
+  say so: the link would be hidden behind it.
+- If `~/.local/bin` is not on `PATH`, say so instead of linking (Omarchy puts
+  it there).
+
+Then run `machines` through the link once to show it works.
 
 ## Know where you are
 

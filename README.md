@@ -68,7 +68,10 @@ permission and fills in both files with you. Omarchy starts agents with their
 approval prompts switched off, so the guide limits the agent to writing those
 two files and asks before it connects anywhere.
 
-To use the `machines` command in a terminal:
+### The `machines` command
+
+The same check as a table in your terminal comes with the plugin, but isn't
+on your `PATH` until you link it (**Set up with agent** offers to do this):
 
 ```bash
 ln -s ~/.config/omarchy/plugins/io.github.frestina.machines/bin/machines ~/.local/bin/machines
@@ -144,9 +147,19 @@ updates without it.
 omarchy plugin remove io.github.frestina.machines
 ```
 
-Your settings and cache are left in place. Delete them with
-`rm -r ~/.config/omarchy-machines ~/.cache/omarchy-machines`, and
-`~/.local/bin/machines` if you linked it.
+Your settings and cache are left in place. Delete them with:
+
+```bash
+rm -r ~/.config/omarchy-machines ~/.cache/omarchy-machines
+```
+
+Anything you or the setup agent added outside the plugin stays too:
+
+- If you added the `machines` command to your terminal, also delete
+  `~/.local/bin/machines`.
+- If you added the [Know where you are](#know-where-you-are) border, remove
+  the `org.omarchy.ssh` rule from `~/.config/hypr/hyprland.lua`. The machine's
+  name in the starship prompt can stay; it works without the plugin.
 
 ## Development
 
