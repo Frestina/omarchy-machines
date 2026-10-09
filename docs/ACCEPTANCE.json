@@ -11,7 +11,8 @@
     "qs ipc call io.github.frestina.machines open / close / refresh",
     "omarchy-launch-floating-terminal-with-presentation <plugin>/bin/machines (right-click action)",
     "omarchy plugin update io.github.frestina.machines --yes && omarchy restart shell",
-    "demo/run (fictional fixture preview)"
+    "demo/run (fictional fixture preview)",
+    "omarchy plugin remove io.github.frestina.machines --yes; omarchy plugin add https://github.com/Frestina/omarchy-machines --enable --yes"
   ],
   "results": [
     "Installed from git and enabled into the bar without errors.",
@@ -19,10 +20,10 @@
     "Right-click table ran the bundled script from the plugin folder.",
     "Update pulled the new commit; new QML loaded after omarchy restart shell.",
     "Missing hosts file, unknown config key and unreachable host give explicit errors (unit and end-to-end tests).",
-    "preview.png captured from the installed widget showing only demo/fixtures data; the real cache was restored."
+    "preview.png captured from the installed widget showing only demo/fixtures data; the real cache was restored.",
+    "Remove unloaded the widget and kept ~/.config/machines; re-adding from the GitHub URL installed and loaded it again. CI passed on ubuntu-24.04."
   ],
   "limitations": [
-    "Tested on x86_64 with a horizontal bar on one monitor; vertical bars and several monitors were not re-tested for this release.",
-    "omarchy plugin remove not yet run against this release."
+    "Tested on x86_64 with a horizontal bar on one monitor; vertical bars and several monitors were not re-tested for this release."
   ]
 }
