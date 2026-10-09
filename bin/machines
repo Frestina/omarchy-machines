@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""machines: one-screen health check of your machines.
+
+Runs a small collector script on each machine (locally for this one, over ssh
+for the rest) and prints a table: uptime, load, memory, disk, pending updates,
+reboot needed, failed systemd units and crashes in the last 7 days. Two
+optional checks, an SSH agent and a dotfiles repository, are switched on in
+the config file.
+
+Machines are listed in ~/.config/machines/hosts, one per line:
+
+    <label>  <ssh target>  [<hostname>]
+
+The line whose hostname matches this machine, or whose target is "local", runs
+locally, so the same file works from any of them. Everything else is reached
+with `ssh <target>`, so your ~/.ssh/config decides users, keys and ports.
+
+Optional settings go in ~/.config/machines/config as `key = value` lines:
+
+    ssh_options = -o IdentityAgent=none    extra options for polling ssh
+    agent_socket = ~/.ssh/agent.sock       SSH agent to check on this machine
+    forwarded_agent_socket = ~/.ssh/fwd.sock   agent to check on the others
+    dotfiles = ~/dotfiles                  git repo to compare across machines
+
+Polling never forwards your agent and never prompts (BatchMode), so a machine
+that needs a password or key approval shows as unreachable.
+
+Usage: machines [--json [--max-age SECONDS | --since EPOCH]] [LABEL...]
+
+--json adds a "view" to each machine: its status (ok, warn, bad, down), the
+issues behind it and the table's display text. The bar widget shows that, so
+the rules for what counts as a problem live only here.
+
+--max-age reuses the last full --json result if it is younger than SECONDS.
+The bar runs one widget per monitor; a lock makes them share one collection.
+--since reuses it only if that collection started at or after EPOCH (Unix
+seconds), so a refresh-now sent to every monitor's widget collects once.
+"""
+
+import fcntl
+import json
+import os
+import shlex
+import socket
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "machines"
+HOSTS_FILE = CONFIG_DIR / "hosts"
+CONFIG_FILE = CONFIG_DIR / "config"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "machines"
+TIMEOUT = 45  # checkupdates and the AUR query hit the network
+CONFIG_KEYS = {"ssh_options", "agent_socket", "forwarded_agent_socket", "dotfiles"}
+
+COLLECTOR = r"""
+export LC_ALL=C
+kv() { printf '%s=%s\n' "$1" "$2"; }
+
+kv hostname "$(hostname)"
+kv uptime_s "$(cut -d. -f1 /proc/uptime)"
+kv load "$(cut -d' ' -f1 /proc/loadavg)"
+kv cpus "$(nproc)"
+kv mem_pct "$(awk '/^MemTotal/{t=$2} /^MemAvailable/{a=$2} END{printf "%d", (t-a)*100/t}' /proc/meminfo)"
+kv disk_pct "$(df -P / | awk 'NR==2{sub("%","",$5); print $5}')"
+kv disk_free "$(df -Ph / | awk 'NR==2{print $4}')"
+
+# A kernel upgrade removes the running kernel's modules dir (Arch); Debian
+# drops a flag file instead.
+reboot=0
+[ -d "/usr/lib/modules/$(uname -r)" ] || [ -d "/lib/modules/$(uname -r)" ] || reboot=1
+[ -e /var/run/reboot-required ] && reboot=1
+kv reboot "$reboot"
+
+if command -v checkupdates >/dev/null; then
+	out=$(timeout 30 checkupdates 2>/dev/null); rc=$?
+	case $rc in 0) kv updates "$(printf '%s\n' "$out" | wc -l)" ;; 2) kv updates 0 ;; *) kv updates "?" ;; esac
+	if command -v yay >/dev/null; then
+		out=$(timeout 20 yay -Qua 2>/dev/null); rc=$?
+		[ $rc -le 1 ] && kv updates_aur "$(printf '%s' "$out" | grep -c .)" || kv updates_aur "?"
+	fi
+elif command -v apt >/dev/null; then
+	kv updates "$(apt list --upgradable 2>/dev/null | grep -c 'upgradable from')"
+fi
+
+kv failed "$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{printf "%s ", $1}')"
+kv failed_user "$(systemctl --user --failed --no-legend --plain 2>/dev/null | awk '{printf "%s ", $1}')"
+
+command -v coredumpctl >/dev/null &&
+	kv crashes "$(coredumpctl list --since=-7d --json=short --no-pager 2>/dev/null | tr -d '\n')"
+
+# ssh-add -l exits 0 with keys, 1 when the agent has none (locked), 2 when
+# nothing answers.
+agent() {
+	[ -S "$1" ] || { echo none; return; }
+	n=$(SSH_AUTH_SOCK=$1 timeout 4 ssh-add -l 2>/dev/null | grep -c .); rc=$?
+	case $rc in 0|1) echo "$n" ;; 124) echo timeout ;; *) echo none ;; esac
+}
+[ -n "$AGENT_SOCK" ] && kv agent "$(agent "$AGENT_SOCK")"
+
+if [ -n "$DOTFILES" ] && [ -d "$DOTFILES/.git" ]; then
+	kv dot_head "$(git -C "$DOTFILES" rev-parse HEAD)"
+	kv dot_dirty "$(git -C "$DOTFILES" status --porcelain | grep -c .)"
+	kv dot_unpushed "$(git -C "$DOTFILES" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+fi
+"""
+
+BASE_SSH_OPTS = [
+    "-T",
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=4",
+    "-o", "ForwardAgent=no",
+]
+
+# --- configuration ------------------------------------------------------------
+
+
+def read_hosts():
+    hosts = []
+    for line in HOSTS_FILE.read_text().splitlines():
+        line = line.split("#", 1)[0].split()
+        if line:
+            label, target, hostname = (line + [None, None])[:3]
+            if target is None:
+                raise ValueError(f"{HOSTS_FILE}: '{label}' has no ssh target")
+            hosts.append({"label": label, "target": target, "hostname": hostname})
+    return hosts
+
+
+def read_config():
+    config = {}
+    try:
+        text = CONFIG_FILE.read_text()
+    except FileNotFoundError:
+        return config
+    for n, line in enumerate(text.splitlines(), 1):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        key, sep, value = (p.strip() for p in line.partition("="))
+        if not sep or key not in CONFIG_KEYS:
+            raise ValueError(f"{CONFIG_FILE}:{n}: expected one of {', '.join(sorted(CONFIG_KEYS))} = value")
+        config[key] = value
+    return config
+
+
+def shell_path(path):
+    """A shell word for a path from the config, expanding ~ on the far side."""
+    if path == "~":
+        return '"$HOME"'
+    if path.startswith("~/"):
+        return '"$HOME"/' + shlex.quote(path[2:])
+    return shlex.quote(path)
+
+
+# --- collecting ---------------------------------------------------------------
+
+
+def is_local(host):
+    return host["target"] == "local" or host["hostname"] == socket.gethostname()
+
+
+def collect(host, config):
+    local = is_local(host)
+    sock = config.get("agent_socket" if local else "forwarded_agent_socket")
+    prelude = "".join(f"{name}={shell_path(value)}\n" for name, value in
+                      [("AGENT_SOCK", sock), ("DOTFILES", config.get("dotfiles"))] if value)
+    ssh = ["ssh", *BASE_SSH_OPTS, *shlex.split(config.get("ssh_options", "")), "--", host["target"]]
+    cmd = ["bash", "-s"] if local else [*ssh, "bash", "-s"]
+    try:
+        p = subprocess.run(cmd, input=prelude + COLLECTOR, capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return {**host, "local": local, "error": f"timed out after {TIMEOUT}s"}
+    data = dict(l.split("=", 1) for l in p.stdout.splitlines() if "=" in l)
+    # The far side only reports facts. It must not rename itself, redirect the
+    # widget's ssh click (target "-oProxyCommand=..." would run here) or claim
+    # to be local, so the hosts file's fields and ours win.
+    for key in ("label", "target", "local", "error", "view"):
+        data.pop(key, None)
+    if "hostname" not in data:
+        err = [l for l in p.stderr.splitlines() if "Pseudo-terminal" not in l]
+        return {**host, "local": local, "error": err[-1] if err else f"exit {p.returncode}"}
+    return {**host, "local": local, **data}
+
+
+def collect_all(hosts, config):
+    with ThreadPoolExecutor(len(hosts)) as pool:
+        return list(pool.map(lambda h: collect(h, config), hosts))
+
+
+def dotfiles_vs_upstream(sha, repo_path):
+    """How a machine's dotfiles HEAD relates to the upstream branch as this machine last saw it."""
+    repo = ["git", "-C", os.path.expanduser(repo_path)]
+
+    def git(*args):
+        return subprocess.run(repo + list(args), capture_output=True, text=True)
+
+    if git("cat-file", "-e", sha + "^{commit}").returncode:
+        return "unknown commit"
+    upstream = git("rev-parse", "@{u}").stdout.strip()
+    if not upstream or sha == upstream:
+        return "" if upstream else "no upstream branch"
+    behind = git("rev-list", "--count", f"{sha}..{upstream}").stdout.strip()
+    ahead = git("rev-list", "--count", f"{upstream}..{sha}").stdout.strip()
+    return ", ".join(p for p in [f"{behind} behind" if behind != "0" else "",
+                                 f"{ahead} ahead" if ahead != "0" else ""] if p)
+
+
+# --- assessing ----------------------------------------------------------------
+
+BASE_HEADERS = ["MACHINE", "UP", "LOAD", "MEM", "DISK /", "UPDATES", "FAILED", "CRASHES"]
+# Columns whose problems cells() already spells out in details.
+EXPLAINED = {"UPDATES", "FAILED", "CRASHES"}
+RANK = {"bad": 2, "warn": 1}
+
+
+def headers(config):
+    has_agent = "agent_socket" in config or "forwarded_agent_socket" in config
+    return BASE_HEADERS + (["AGENT"] if has_agent else []) + (["DOTFILES"] if "dotfiles" in config else [])
+
+
+def duration(seconds):
+    d, rem = divmod(int(seconds), 86400)
+    return f"{d}d {rem // 3600}h" if d else f"{rem // 3600}h {rem % 3600 // 60}m"
+
+
+def cells(m, config, details):
+    """(text, style) per column for one machine, appending (severity, line) to details."""
+    if "error" in m:
+        details.append(("bad", m["error"]))
+        return [(m["label"], "bold"), ("unreachable", "bad")] + [("", None)] * (len(headers(config)) - 2)
+
+    out = [(m["label"] + (" *" if m["local"] else ""), "bold"),
+           (duration(int(m["uptime_s"])), None)]
+
+    load, cpus = float(m["load"]), int(m["cpus"])
+    out.append((f"{load:.1f}/{cpus}", "warn" if load >= cpus else None))
+    mem = int(m["mem_pct"])
+    out.append((f"{mem}%", "warn" if mem >= 90 else None))
+    disk = int(m["disk_pct"])
+    out.append((f"{disk}% ({m['disk_free']} free)",
+                "bad" if disk >= 90 else "warn" if disk >= 80 else None))
+
+    upd = m.get("updates", "?")
+    aur = m.get("updates_aur")
+    text = upd + (f" +{aur} aur" if aur not in (None, "0") else "")
+    reboot = m.get("reboot") == "1"
+    if reboot:
+        text += ", reboot"
+        details.append(("warn", "running kernel was upgraded, reboot to load the new one"))
+    out.append((text, "warn" if reboot or (upd.isdigit() and int(upd) >= 50) else
+                "dim" if upd == "0" and aur in (None, "0") else None))
+
+    failed = m.get("failed", "").split() + [f"{u} (user)" for u in m.get("failed_user", "").split()]
+    out.append((str(len(failed)), "bad" if failed else "dim"))
+    if failed:
+        details.append(("bad", f"failed units: {', '.join(failed)}"))
+
+    try:
+        crashes = json.loads(m.get("crashes") or "[]")
+    except json.JSONDecodeError:
+        crashes = []
+    out.append((str(len(crashes)), "warn" if crashes else "dim"))
+    if crashes:
+        names = {}
+        for c in crashes:
+            exe = os.path.basename(c.get("exe") or str(c.get("pid")))
+            names[exe] = names.get(exe, 0) + 1
+        listed = ", ".join(f"{n} ×{k}" if k > 1 else n for n, k in names.items())
+        details.append(("warn", f"crashed in the last 7 days: {listed} (coredumpctl list)"))
+
+    if "AGENT" in headers(config):
+        out.append(agent_cell(m))
+
+    if "DOTFILES" in headers(config):
+        out.append(dotfiles_cell(m, config["dotfiles"]))
+    return out
+
+
+def agent_cell(m):
+    # This machine: is its agent up and unlocked? Others: is there a live
+    # agent forwarded in by an ssh session right now?
+    state = m.get("agent")
+    if state is None:
+        return ("-", "dim")
+    if state == "none":
+        return ("not running" if m["local"] else "no session", "bad" if m["local"] else "dim")
+    if state == "timeout":
+        return ("not answering", "warn")
+    if state == "0":
+        return ("locked (0 keys)", "warn")
+    return (f"{state} keys" + ("" if m["local"] else " fwd"), "ok")
+
+
+def dotfiles_cell(m, repo_path):
+    if "dot_head" not in m:
+        return ("-", "dim")
+    issues = []
+    if m["dot_unpushed"] not in ("0", "?"):
+        issues.append(f"{m['dot_unpushed']} unpushed")
+    elif rel := dotfiles_vs_upstream(m["dot_head"], repo_path):
+        issues.append(rel)
+    if m["dot_dirty"] != "0":
+        issues.append(f"{m['dot_dirty']} uncommitted")
+    return (" ".join([m["dot_head"][:7], ", ".join(issues)]).strip(), "warn" if issues else "ok")
+
+
+def assess(m, config):
+    """The view of one machine shared by the table and --json (the bar widget):
+    display cells, detail lines, every issue with its severity, and a status."""
+    details = []
+    row = cells(m, config, details)
+    issues = [{"severity": sev, "text": text} for sev, text in details]
+    issues += [{"severity": style, "text": f"{h.lower()}: {text}"}
+               for h, (text, style) in zip(headers(config), row)
+               if style in RANK and h not in EXPLAINED]
+    worst = max((RANK[i["severity"]] for i in issues), default=0)
+    status = "down" if "error" in m else {2: "bad", 1: "warn", 0: "ok"}[worst]
+    return {"cells": row, "details": details, "issues": issues, "status": status}
+
+
+# --- rendering ----------------------------------------------------------------
+
+COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+STYLES = {"ok": "32", "warn": "33", "bad": "1;31", "dim": "2", "bold": "1"}
+
+
+def paint(text, style):
+    return f"\033[{STYLES[style]}m{text}\033[0m" if COLOR and style else text
+
+
+def render(machines, config):
+    cols = headers(config)
+    views = [assess(m, config) for m in machines]
+    rows = [v["cells"] for v in views]
+    details = [f"{m['label']}: {text}" for m, v in zip(machines, views) for _, text in v["details"]]
+    widths = [max(len(h), *(len(r[i][0]) for r in rows)) for i, h in enumerate(cols)]
+    print("  ".join(paint(h.ljust(w), "dim") for h, w in zip(cols, widths)).rstrip())
+    for r in rows:
+        print("  ".join(paint(t.ljust(w), s) for (t, s), w in zip(r, widths)).rstrip())
+    if details:
+        print()
+        for d in details:
+            print(paint("• ", "warn") + d)
+    note = "* this machine."
+    if "AGENT" in cols:
+        note += " AGENT: the agent here, a live forwarded agent elsewhere."
+    print(paint("\n" + note, "dim"))
+
+
+def json_report(machines, config):
+    cols = headers(config)
+    for m in machines:
+        v = assess(m, config)
+        m["view"] = {"status": v["status"], "issues": v["issues"],
+                     "columns": {h: {"text": t, "style": st} for h, (t, st) in zip(cols, v["cells"])}}
+    return json.dumps(machines, indent=2)
+
+
+def cached_json(hosts, config, max_age, since=None):
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache = CACHE_DIR / "last.json"
+    # Held across the check and the collection, so a second caller waits for
+    # the first and then reads its fresh result.
+    with open(CACHE_DIR / "lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            # The cache's mtime is when its collection started.
+            started = cache.stat().st_mtime
+            if ((max_age is not None and time.time() - started < max_age)
+                    or (since is not None and started >= since)):
+                print(cache.read_text())
+                return 0
+        except FileNotFoundError:
+            pass
+        started = time.time()
+        report = json_report(collect_all(hosts, config), config)
+        tmp = cache.with_suffix(".tmp")
+        tmp.write_text(report)
+        os.utime(tmp, (started, started))
+        tmp.replace(cache)
+    print(report)
+    return 0
+
+
+def main(argv):
+    if "-h" in argv or "--help" in argv:
+        print(__doc__.strip())
+        return 0
+    as_json = "--json" in argv
+    max_age = since = None
+    try:
+        if "--max-age" in argv:
+            i = argv.index("--max-age")
+            max_age = float(argv[i + 1])
+            del argv[i:i + 2]
+        if "--since" in argv:
+            i = argv.index("--since")
+            since = float(argv[i + 1])
+            del argv[i:i + 2]
+    except (IndexError, ValueError):
+        print("machines: --max-age and --since take a number of seconds", file=sys.stderr)
+        return 2
+    wanted = [a for a in argv if not a.startswith("-")]
+    try:
+        config = read_config()
+        hosts = read_hosts()
+    except FileNotFoundError:
+        print(f"machines: no machines configured yet; list them in {HOSTS_FILE}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(f"machines: {e}", file=sys.stderr)
+        return 2
+    if as_json and (max_age is not None or since is not None) and not wanted and hosts:
+        return cached_json(hosts, config, max_age, since)
+    hosts = [h for h in hosts if not wanted or h["label"] in wanted]
+    if not hosts:
+        print(f"machines: no machines matched; list them in {HOSTS_FILE}", file=sys.stderr)
+        return 2
+    machines = collect_all(hosts, config)
+    if as_json:
+        print(json_report(machines, config))
+    else:
+        render(machines, config)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

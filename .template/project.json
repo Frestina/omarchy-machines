@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "templateVersion": "0.1.0",
+  "kind": "plugin",
+  "owner": "Frestina",
+  "repo": "omarchy-machines",
+  "slug": "machines",
+  "name": "Machines",
+  "author": "Frestina",
+  "id": "io.github.frestina.machines",
+  "description": "Bar widget that shows the health of your machines over ssh: load, memory, disk, updates, failed units and crashes.",
+  "year": "2026",
+  "inspiration": "",
+  "initialized": true
+}
