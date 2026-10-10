@@ -426,7 +426,8 @@ Panel {
                   textFormat: Text.PlainText
                   text: "• " + modelData.text
                   wrapMode: Text.Wrap
-                  color: modelData.severity === "bad" ? Color.urgent : root.barForeground
+                  color: modelData.severity === "bad" ? Color.urgent
+                    : modelData.severity === "info" ? root.dim(0.6) : root.barForeground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.bodySmall
                 }

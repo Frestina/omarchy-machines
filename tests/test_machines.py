@@ -240,8 +240,10 @@ class Repos(unittest.TestCase):
              "repo1_head": self.SHA, "repo1_dirty": "2", "repo1_unpushed": "1"}
         with mock.patch.object(machines, "repo_vs_upstream", return_value=""):
             v = machines.assess(m, config)
-        self.assertEqual(v["cells"][-2:], [("aaaaaaa", "ok"), ("aaaaaaa 1 unpushed, 2 uncommitted", "warn")])
-        self.assertEqual(v["issues"], [{"severity": "warn", "text": "app: aaaaaaa 1 unpushed, 2 uncommitted"}])
+        self.assertEqual(v["cells"][-2:], [("aaaaaaa", "ok"), ("aaaaaaa 1 unpushed, 2 uncommitted", "info")])
+        self.assertEqual(v["issues"], [{"severity": "info", "text": "app: aaaaaaa 1 unpushed, 2 uncommitted"}])
+        # Listed, but not a reason for attention.
+        self.assertEqual(v["status"], "ok")
 
     def test_missing_repo_is_dim(self):
         v = machines.assess({**HEALTHY, "repo1_head": self.SHA}, {"repos": ["~/a", "~/b"]})
@@ -314,7 +316,7 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         [m] = json.loads(p.stdout)
         cell = m["view"]["columns"][Path(repo).name.upper()]
-        self.assertEqual(cell["style"], "warn")
+        self.assertEqual(cell["style"], "info")
         self.assertTrue(cell["text"].endswith("no upstream branch, 1 uncommitted"), cell["text"])
 
     def test_local_json(self):

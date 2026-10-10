@@ -20,7 +20,8 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
   (`label`, `target`, `local`) and the computed `error` and `view` always come
   from this side, so a machine cannot redirect the widget's ssh click.
 - `assess()` turns facts into display cells, issues with a severity, and a
-  status (`ok`, `warn`, `bad`, `down`). The terminal table and `--json` share
+  status (`ok`, `warn`, `bad`, `down`). Repository issues have the severity
+  `info`: listed, but never raising the status. The terminal table and `--json` share
   it.
 - `--json --max-age N` / `--since EPOCH` serve `~/.cache/omarchy-machines/last.json`
   under an exclusive `flock`, so the widget's copies on several monitors share

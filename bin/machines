@@ -283,6 +283,9 @@ BASE_HEADERS = ["MACHINE", "UP", "LOAD", "MEM", "DISK /", "UPDATES", "FAILED", "
 # Columns whose problems cells() already spells out in details.
 EXPLAINED = {"UPDATES", "FAILED", "CRASHES"}
 RANK = {"bad": 2, "warn": 1}
+# Listed with the issues, but never a reason for attention: a repo out of sync
+# is often work in progress.
+INFO = "info"
 
 
 def headers(config):
@@ -376,7 +379,7 @@ def repo_cell(m, key, repo_path):
         issues.append(rel)
     if dirty != "0":
         issues.append(f"{dirty} uncommitted")
-    return (" ".join([head[:7], ", ".join(issues)]).strip(), "warn" if issues else "ok")
+    return (" ".join([head[:7], ", ".join(issues)]).strip(), INFO if issues else "ok")
 
 
 def assess(m, config):
@@ -388,8 +391,8 @@ def assess(m, config):
     if "error" not in m:  # the error already says why every cell is empty
         issues += [{"severity": style, "text": f"{h.lower()}: {text}"}
                    for h, (text, style) in zip(headers(config), row)
-                   if style in RANK and h not in EXPLAINED]
-    worst = max((RANK[i["severity"]] for i in issues), default=0)
+                   if (style in RANK or style == INFO) and h not in EXPLAINED]
+    worst = max((RANK.get(i["severity"], 0) for i in issues), default=0)
     status = "down" if "error" in m else {2: "bad", 1: "warn", 0: "ok"}[worst]
     return {"cells": row, "details": details, "issues": issues, "status": status}
 
@@ -397,7 +400,7 @@ def assess(m, config):
 # --- rendering ----------------------------------------------------------------
 
 COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
-STYLES = {"ok": "32", "warn": "33", "bad": "1;31", "dim": "2", "bold": "1"}
+STYLES = {"ok": "32", "info": "36", "warn": "33", "bad": "1;31", "dim": "2", "bold": "1"}
 
 
 def paint(text, style):
