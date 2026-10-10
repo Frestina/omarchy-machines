@@ -39,7 +39,7 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
   plugin, then runs `omarchy-plugin-remove --yes` first, so a running widget
   can't create its files again. A start marker without an end is left
   alone, and `hyprland.lua` is written through a symlink to the file it
-  points at. `starship.toml` is never edited: what we added there can't be
+  points at. A folder that is a symlink loses only the link. `starship.toml` is never edited: what we added there can't be
   told apart from the user's own settings.
 
 ## `hypr/ssh-border.lua` (optional, in Hyprland)

@@ -595,8 +595,10 @@ def without_border_rule(text):
     return "\n".join(tidy).rstrip("\n") + "\n"
 
 
-def our_link(link=LINK):
-    """Whether `link` is a symlink to this plugin's command, wherever installed."""
+def our_link(link=None):
+    """Whether `link` (by default LINK) is a symlink to this plugin's command,
+    wherever installed."""
+    link = link or LINK
     if not link.is_symlink():
         return False
     target = os.path.normpath(link.parent / os.readlink(link))
@@ -612,9 +614,12 @@ def write_in_place(path, text):
     """Replace a file's contents; through a symlink, the file it points at."""
     real = path.resolve()
     tmp = real.with_name(f".{real.name}.machines-{os.getpid()}")
-    tmp.write_text(text)
-    shutil.copymode(real, tmp)
-    os.replace(tmp, real)
+    try:
+        tmp.write_text(text)
+        shutil.copymode(real, tmp)
+        os.replace(tmp, real)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def uninstall_plan():
@@ -622,7 +627,10 @@ def uninstall_plan():
     (description, action) pairs."""
     plan = []
     for folder in (CONFIG_DIR, CACHE_DIR, DISMISSED_FILE.parent):
-        if folder.exists():
+        if folder.is_symlink():
+            # Stowed from dotfiles, say: the link goes, what it points at stays.
+            plan.append((f"{tilde(folder)}, only the link to {tilde(folder.resolve())}", folder.unlink))
+        elif folder.exists():
             plan.append((f"{tilde(folder)}/", lambda folder=folder: shutil.rmtree(folder)))
     if our_link():
         plan.append((f"{tilde(LINK)}, the link to the `machines` command", LINK.unlink))
@@ -679,7 +687,7 @@ def uninstall():
                 action()
                 print(f"Removed {description}.")
             except OSError as e:
-                print(f"machines: could not remove {description}: {e.strerror}", file=sys.stderr)
+                print(f"machines: could not remove {description}: {e.strerror or e}", file=sys.stderr)
     print("\nThe machine's name in your starship prompt, if you added it, is left as it is.")
     print("To remove it, see Remove in https://github.com/Frestina/omarchy-machines#remove")
     return 0

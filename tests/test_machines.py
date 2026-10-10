@@ -447,6 +447,34 @@ o.window("^org\\\\.omarchy\\\\.ssh$", { border_color = "rgb(61afef) rgba(61afef8
             self.assertTrue(link.is_symlink())
             self.assertEqual(real.read_text(), "new\n")
 
+    def test_linked_folder_loses_only_the_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "dotfiles").mkdir()
+            (base / "dotfiles" / "hosts").write_text("here local\n")
+            config = base / "omarchy-machines"
+            config.symlink_to(base / "dotfiles")
+            with mock.patch.object(machines, "CONFIG_DIR", config), \
+                 mock.patch.object(machines, "CACHE_DIR", base / "none"), \
+                 mock.patch.object(machines, "DISMISSED_FILE", base / "none" / "x.json"), \
+                 mock.patch.object(machines, "LINK", base / "none-link"), \
+                 mock.patch.object(machines, "HYPR_FILE", base / "none.lua"):
+                [(description, action)] = machines.uninstall_plan()
+                self.assertIn("only the link", description)
+                action()
+            self.assertFalse(config.is_symlink())
+            self.assertEqual((base / "dotfiles" / "hosts").read_text(), "here local\n")
+
+    def test_failed_write_leaves_no_temporary_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "hyprland.lua"
+            real.write_text("old\n")
+            with mock.patch.object(machines.os, "replace", side_effect=OSError(28, "No space left")):
+                with self.assertRaises(OSError):
+                    machines.write_in_place(real, "new\n")
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["hyprland.lua"])
+            self.assertEqual(real.read_text(), "old\n")
+
     def test_refuses_without_a_terminal(self):
         p = subprocess.run([sys.executable, str(SCRIPT), "--uninstall"], capture_output=True,
                            text=True, stdin=subprocess.DEVNULL, timeout=30)

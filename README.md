@@ -179,7 +179,8 @@ It lists what the plugin and its setup left on this machine, and asks whether
 to remove all of it or only the plugin:
 
 - `~/.config/omarchy-machines`, `~/.cache/omarchy-machines` and
-  `~/.local/state/omarchy-machines`
+  `~/.local/state/omarchy-machines`. If one of them is a link, for example
+  into your dotfiles, only the link is removed, not what it points at.
 - the `~/.local/bin/machines` link, if it points at this plugin
 - the [Know where you are](#know-where-you-are) border in
   `~/.config/hypr/hyprland.lua`. Only the block between the
