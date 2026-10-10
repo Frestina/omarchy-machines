@@ -169,7 +169,7 @@ updates without it.
 
 ## Remove
 
-Choose **Uninstall** (the bin icon at the bottom of the popup), or run:
+Choose **Uninstall** at the bottom of the popup, or run:
 
 ```bash
 ~/.config/omarchy/plugins/io.github.frestina.machines/bin/machines --uninstall

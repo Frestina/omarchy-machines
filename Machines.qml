@@ -523,7 +523,7 @@ Panel {
 
         PanelSeparator { foreground: root.barForeground }
 
-        // ---------- Footer: the two files · agent setup ----------
+        // ---------- Footer: the two files, then uninstall · agent setup ----------
         RowLayout {
           width: parent.width
           spacing: Style.space(4)
@@ -548,10 +548,18 @@ Panel {
             onClicked: root.runCommand(["--edit", "config"])
           }
 
+          Item { Layout.fillWidth: true }
+        }
+
+        RowLayout {
+          width: parent.width
+          spacing: Style.space(4)
+
           // Asks in a terminal what to remove before it removes anything.
           Button {
             iconText: "󰆴"
-            tooltipText: "Uninstall Machines…"
+            text: "Uninstall"
+            tooltipText: "Asks what to remove, then uninstalls Machines"
             foreground: root.barForeground
             fontFamily: root.bar.fontFamily
             fontSize: Style.font.bodySmall
