@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -43,6 +44,7 @@ class ConfigDir(unittest.TestCase):
             "HOSTS_FILE": base / "hosts",
             "CONFIG_FILE": base / "config",
             "CACHE_DIR": base / "cache",
+            "DISMISSED_FILE": base / "state" / "dismissed-crashes.json",
         }
         for name, value in patches.items():
             p = mock.patch.object(machines, name, value)
@@ -186,14 +188,15 @@ class Assess(unittest.TestCase):
 class FirstRun(ConfigDir):
     def test_creates_both_files_with_this_machine(self):
         with mock.patch("socket.gethostname", return_value="box.example"):
-            self.assertEqual(machines.ensure_files(), [self.base / "hosts", self.base / "config"])
+            self.assertEqual(machines.ensure_files(), [self.base / "hosts", self.base / "config",
+                                                       self.base / "state" / "dismissed-crashes.json"])
             self.assertEqual(machines.read_hosts(), [{"label": "box", "target": "box.example", "hostname": "box.example"}])
             self.assertTrue(machines.is_local(machines.read_hosts()[0]))
         self.assertEqual(machines.read_config(), {})
 
     def test_never_replaces_existing_files(self):
         (self.base / "hosts").write_text("mine local\n")
-        self.assertEqual(machines.ensure_files(), [self.base / "config"])
+        self.assertEqual(machines.ensure_files(), [self.base / "config", self.base / "state" / "dismissed-crashes.json"])
         self.assertEqual((self.base / "hosts").read_text(), "mine local\n")
         self.assertEqual(machines.ensure_files(), [])
 
@@ -241,13 +244,18 @@ class Repos(unittest.TestCase):
         with mock.patch.object(machines, "repo_vs_upstream", return_value=""):
             v = machines.assess(m, config)
         self.assertEqual(v["cells"][-2:], [("aaaaaaa", "ok"), ("aaaaaaa 1 unpushed, 2 uncommitted", "info")])
-        self.assertEqual(v["issues"], [{"severity": "info", "text": "app: aaaaaaa 1 unpushed, 2 uncommitted"}])
-        # Listed, but not a reason for attention.
+        # Always listed, never a reason for attention.
+        self.assertEqual(v["issues"], [])
+        self.assertEqual(v["repos"], [{"name": "dotfiles", "status": "ok", "text": "up to date"},
+                                      {"name": "app", "status": "info", "text": "1 unpushed, 2 uncommitted"}])
         self.assertEqual(v["status"], "ok")
 
-    def test_missing_repo_is_dim(self):
-        v = machines.assess({**HEALTHY, "repo1_head": self.SHA}, {"repos": ["~/a", "~/b"]})
+    def test_missing_repo_is_dim_and_not_listed(self):
+        with mock.patch.object(machines, "repo_vs_upstream", return_value=""):
+            v = machines.assess({**HEALTHY, "repo1_head": self.SHA, "repo1_dirty": "0", "repo1_unpushed": "0"},
+                                {"repos": ["~/a", "~/b"]})
         self.assertEqual(v["cells"][-2], ("-", "dim"))
+        self.assertEqual([r["name"] for r in v["repos"]], ["b"])
 
     def test_far_side_sha_never_reaches_git_as_an_option(self):
         with mock.patch("subprocess.run") as run:
@@ -266,6 +274,40 @@ class Repos(unittest.TestCase):
         m = {**HEALTHY, "repo0_head": self.SHA, "repo0_dirty": "0", "repo0_unpushed": "0", "repo0_behind": "0"}
         with mock.patch.object(machines, "repo_vs_upstream", return_value="2 behind"):
             self.assertEqual(machines.repo_cell(m, "repo0_", "~/dotfiles"), ("aaaaaaa 2 behind", "info"))
+
+
+class DismissedCrashes(ConfigDir):
+    def setUp(self):
+        super().setUp()
+        now = int(time.time() * 1e6)
+        self.old, self.new = {"time": now - 10**9, "pid": 7, "exe": "/usr/bin/foot"}, {"time": now, "pid": 9, "exe": "/usr/bin/foot"}
+
+    def machine(self, *crashes):
+        return {**HEALTHY, "crashes": json.dumps(list(crashes))}
+
+    def test_crash_issue_carries_its_ids(self):
+        [issue] = machines.assess(self.machine(self.old, self.new), {})["issues"]
+        self.assertEqual(issue["crashes"], [machines.crash_id(self.old), machines.crash_id(self.new)])
+
+    def test_dismissed_crashes_are_gone_and_new_ones_show(self):
+        machines.dismiss_crashes("desktop", [machines.crash_id(self.old)])
+        dismissed = machines.read_dismissed()["desktop"]
+        self.assertEqual(machines.assess(self.machine(self.old), {}, dismissed)["status"], "ok")
+        v = machines.assess(self.machine(self.old, self.new), {}, dismissed)
+        self.assertEqual(v["status"], "warn")
+        self.assertEqual(v["issues"][0]["crashes"], [machines.crash_id(self.new)])
+        self.assertEqual(v["cells"][7], ("1", "warn"))
+
+    def test_dismissals_older_than_the_check_are_dropped(self):
+        stale = f"{int((time.time() - 30 * 86400) * 1e6)}-1"
+        machines.dismiss_crashes("desktop", [stale, machines.crash_id(self.new)])
+        self.assertEqual(machines.read_dismissed(), {"desktop": {machines.crash_id(self.new)}})
+
+    def test_cli_rejects_odd_ids(self):
+        for args in (["desktop", "$(boom)"], ["desktop"], []):
+            with mock.patch("sys.stderr"):
+                self.assertEqual(machines.main(["--dismiss-crashes", *args]), 2)
+        self.assertEqual(machines.read_dismissed(), {})
 
 
 class Cache(ConfigDir):
@@ -288,7 +330,7 @@ class EndToEnd(unittest.TestCase):
             if hosts is not None:
                 os.makedirs(f"{tmp}/omarchy-machines")
                 Path(f"{tmp}/omarchy-machines/hosts").write_text(hosts)
-            env = {**os.environ, "XDG_CONFIG_HOME": tmp, "XDG_CACHE_HOME": f"{tmp}/cache"}
+            env = {**os.environ, "XDG_CONFIG_HOME": tmp, "XDG_CACHE_HOME": f"{tmp}/cache", "XDG_STATE_HOME": f"{tmp}/state"}
             p = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True,
                                text=True, env=env, timeout=120)
             if files is not None:
@@ -323,7 +365,7 @@ class EndToEnd(unittest.TestCase):
                 os.makedirs(f"{tmp}/omarchy-machines")
                 Path(f"{tmp}/omarchy-machines/hosts").write_text("here local\n")
                 Path(f"{tmp}/omarchy-machines/config").write_text(f"repo = {repo}\n")
-                env = {**os.environ, "XDG_CONFIG_HOME": tmp, "XDG_CACHE_HOME": f"{tmp}/cache"}
+                env = {**os.environ, "XDG_CONFIG_HOME": tmp, "XDG_CACHE_HOME": f"{tmp}/cache", "XDG_STATE_HOME": f"{tmp}/state"}
                 p = subprocess.run([sys.executable, str(SCRIPT), "--json"], capture_output=True,
                                    text=True, env=env, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)

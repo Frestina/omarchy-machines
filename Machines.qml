@@ -34,12 +34,18 @@ Panel {
   readonly property string command: decodeURIComponent(Qt.resolvedUrl("bin/machines").toString().replace(/^file:\/\//, ""))
   // Matches CONFIG_DIR in bin/machines, which creates both files on first run.
   readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/omarchy-machines"
+  // Matches DISMISSED_FILE in bin/machines.
+  readonly property string dismissedFile: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy-machines/dismissed-crashes.json"
   readonly property int refreshSec: Math.max(60, Number(setting("refreshIntervalSec", 600)) || 600)
 
   // Nothing listed yet but the machine this runs on.
   readonly property bool onlyThisMachine: error === "" && machines.length > 0 && machines.every(function(m) { return m.local })
-  // When the hosts file or settings were saved (Unix seconds); see filesChanged.
+  // When the hosts file, settings or dismissed crashes were saved (Unix
+  // seconds); see fileSaved().
   property real savedAt: 0
+  // A watch only takes on a file that exists, and the script creates all three
+  // on its first run, so the watchers start once a check has succeeded.
+  property bool filesReady: false
 
   readonly property var needAttention: machines.filter(function(m) {
     return m.view && m.view.status !== "ok"
@@ -110,6 +116,7 @@ Panel {
         if (!Array.isArray(data)) throw new Error("unexpected output from `machines --json`")
         machines = data
         error = ""
+        filesReady = true
         checkedAt = new Date()
       } catch (e) {
         error = e.message || reason || "`machines --json` failed"
@@ -132,6 +139,13 @@ Panel {
     if (!root.bar) return
     root.close()
     root.bar.run([root.command].concat(args).map(Util.shellQuote).join(" "))
+  }
+
+  // The popup stays open: the dismissed file's watcher checks again, and the
+  // crash line goes away.
+  function dismissCrashes(machine, ids) {
+    if (!root.bar || !ids || ids.length === 0) return
+    root.bar.run([root.command, "--dismiss-crashes", machine.label].concat(ids).map(Util.shellQuote).join(" "))
   }
 
   function ssh(machine) {
@@ -204,14 +218,21 @@ Panel {
   }
 
   FileView {
-    path: root.configDir + "/hosts"
+    path: root.filesReady ? root.configDir + "/hosts" : ""
     watchChanges: true
     printErrors: false
     onFileChanged: root.fileSaved()
   }
 
   FileView {
-    path: root.configDir + "/config"
+    path: root.filesReady ? root.configDir + "/config" : ""
+    watchChanges: true
+    printErrors: false
+    onFileChanged: root.fileSaved()
+  }
+
+  FileView {
+    path: root.filesReady ? root.dismissedFile : ""
     watchChanges: true
     printErrors: false
     onFileChanged: root.fileSaved()
@@ -419,15 +440,47 @@ Panel {
               Repeater {
                 model: machineRow.issues
 
+                delegate: RowLayout {
+                  id: issueRow
+                  required property var modelData
+                  width: rowColumn.width
+                  spacing: Style.space(4)
+
+                  Text {
+                    Layout.fillWidth: true
+                    leftPadding: Style.space(16)
+                    textFormat: Text.PlainText
+                    text: "• " + issueRow.modelData.text
+                    wrapMode: Text.Wrap
+                    color: issueRow.modelData.severity === "bad" ? Color.urgent : root.barForeground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  // Crash lines only: hides exactly these crashes; later ones show.
+                  PanelActionButton {
+                    visible: !!issueRow.modelData.crashes
+                    iconText: "󰄬"
+                    tooltipText: "Dismiss these crashes"
+                    foreground: root.barForeground
+                    fontFamily: root.bar.fontFamily
+                    onClicked: root.dismissCrashes(machineRow.modelData, issueRow.modelData.crashes)
+                  }
+                }
+              }
+
+              // Every configured repo this machine has: muted when up to date.
+              Repeater {
+                model: machineRow.modelData.view && machineRow.modelData.view.repos ? machineRow.modelData.view.repos : []
+
                 delegate: Text {
                   required property var modelData
                   width: rowColumn.width
                   leftPadding: Style.space(16)
                   textFormat: Text.PlainText
-                  text: "• " + modelData.text
-                  wrapMode: Text.Wrap
-                  color: modelData.severity === "bad" ? Color.urgent
-                    : modelData.severity === "info" ? root.dim(0.6) : root.barForeground
+                  text: "󰊢 " + modelData.name + ": " + modelData.text
+                  elide: Text.ElideRight
+                  color: modelData.status === "ok" ? root.dim(0.45) : root.barForeground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.bodySmall
                 }

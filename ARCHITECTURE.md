@@ -45,14 +45,22 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
 - The footer runs the script with `--edit hosts|config` (Omarchy's default
   editor) or `--setup-with-agent` (`omarchy agent prompt` pointing at
   `docs/AGENT_SETUP.md`, or Omarchy's agent picker when none is chosen). A
-  `FileView` watches both files; a save waits 500 ms for the editor to finish,
-  then refreshes with `--since` the save, so every monitor shares one check.
+  `FileView` watches both files and the dismissed crashes; a save waits 500 ms
+  for the editor to finish, then refreshes with `--since` the save, so every
+  monitor shares one check. A watch only takes on an existing file, so the
+  watchers get their paths after the first successful check, by which time
+  the script has created all three.
+- Repos are listed per machine from the view's `repos` (`ok` muted, `info` in
+  full), never as issues. A crash issue carries its crash ids
+  (`<time>-<pid>`); its ✓ runs `--dismiss-crashes <label> <ids…>`, which adds
+  exactly those to `~/.local/state/omarchy-machines/dismissed-crashes.json`.
+  Ids older than the 7-day window are pruned on each write.
 - All external text is rendered with `Text.PlainText`. The ssh click and the
   table action go through the bar's `run()` with `Util.shellQuote`.
 - IPC target `io.github.frestina.machines`: `open`, `close`, `toggle`,
   `refresh`.
 
 Nothing runs with elevated privileges, nothing is installed outside the plugin
-folder, and removal leaves only `~/.config/omarchy-machines` and
-`~/.cache/omarchy-machines`.
+folder, and removal leaves only `~/.config/omarchy-machines`,
+`~/.cache/omarchy-machines` and `~/.local/state/omarchy-machines`.
 Node.js is a development dependency for the repository checks only.

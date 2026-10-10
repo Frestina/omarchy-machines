@@ -27,7 +27,7 @@ editor, and can hand the setup to your coding agent.
 | Disk `/` | 80% full (90% is shown as a problem) |
 | Updates | 50 or more pending, or the running kernel was upgraded and needs a reboot (pacman with `checkupdates`, `yay` for AUR, or apt) |
 | Failed units | any failed systemd unit, system or user |
-| Crashes | any core dump in the last 7 days (`coredumpctl`) |
+| Crashes | any core dump in the last 7 days (`coredumpctl`). Once you have looked into them, dismiss them with the ✓ on their line in the popup; only crashes after that show. |
 | Agent, git repositories | optional, see [settings](#optional-settings) |
 
 A machine that cannot be reached within a few seconds shows as down with the
@@ -88,7 +88,7 @@ front of a setting to turn it on. They are kept in
 | `ssh_options` | Extra options for the polling ssh connections, for example `-o IdentityAgent=none` to keep a password manager's agent from asking for approval on every check. |
 | `agent_socket` | Adds an AGENT column: whether this agent is running and unlocked on this machine. |
 | `forwarded_agent_socket` | On the other machines: whether an ssh session has forwarded your agent there right now. |
-| `repo` | Adds a column, named after the folder, comparing a git repository across machines: uncommitted and unpushed changes, and commits behind or ahead of its upstream. One line per repository. Every machine with a repository at that path reports it, and the others show `-`, so a project that lives only on a machine you ssh into works too. A repository out of sync is listed in the popup but never counts as needing attention. `dotfiles = <path>` from earlier versions still works the same way. |
+| `repo` | Adds a column, named after the folder, comparing a git repository across machines: uncommitted and unpushed changes, and commits behind or ahead of its upstream. One line per repository. Every machine with a repository at that path reports it, and the others show `-`, so a project that lives only on a machine you ssh into works too. The popup lists each repository under every machine that has it: muted when up to date, in full when it is out of sync. It never counts as needing attention. `dotfiles = <path>` from earlier versions still works the same way. |
 
 The refresh interval (10 minutes by default) is a widget setting in the bar
 settings.
@@ -126,6 +126,9 @@ style = "bold yellow"
 - It creates `~/.config/omarchy-machines/hosts` and `config` if they are
   missing, and edits nothing after that.
 - The last result is cached in `~/.cache/omarchy-machines/`.
+- Crashes you dismiss are remembered in
+  `~/.local/state/omarchy-machines/dismissed-crashes.json`, on the machine you
+  dismissed them from.
 - Your machine list and settings stay in `~/.config/omarchy-machines/` on your
   machine; nothing is sent anywhere else.
 - **Set up with agent** runs `omarchy agent` with your default coding agent,
@@ -150,7 +153,7 @@ omarchy plugin remove io.github.frestina.machines
 Your settings and cache are left in place. Delete them with:
 
 ```bash
-rm -r ~/.config/omarchy-machines ~/.cache/omarchy-machines
+rm -r ~/.config/omarchy-machines ~/.cache/omarchy-machines ~/.local/state/omarchy-machines
 ```
 
 Anything you or the setup agent added outside the plugin stays too:

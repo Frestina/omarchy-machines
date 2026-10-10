@@ -32,6 +32,7 @@ files are never replaced.
 Usage: machines [--json [--max-age SECONDS | --since EPOCH]] [LABEL...]
        machines --edit hosts|config
        machines --setup-with-agent
+       machines --dismiss-crashes LABEL ID...
 
 --json adds a "view" to each machine: its status (ok, warn, bad, down), the
 issues behind it and the table's display text. The bar widget shows that, so
@@ -43,6 +44,10 @@ The bar runs one widget per monitor; a lock makes them share one collection.
 seconds), so a refresh-now sent to every monitor's widget collects once.
 
 --edit opens one of the two files in Omarchy's default editor.
+
+--dismiss-crashes hides those crashes (ids are "<time>-<pid>" from
+coredumpctl, as listed in --json) of the machine LABEL from now on; later
+crashes still show. Dismissals are kept on this machine only.
 
 --setup-with-agent starts your default coding agent (`omarchy agent`) with the
 guide in docs/AGENT_SETUP.md, to fill in the hosts file and settings with you.
@@ -66,6 +71,8 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") 
 HOSTS_FILE = CONFIG_DIR / "hosts"
 CONFIG_FILE = CONFIG_DIR / "config"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "omarchy-machines"
+# Crashes dismissed from this machine's widget: {label: ["<time>-<pid>", ...]}.
+DISMISSED_FILE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "omarchy-machines" / "dismissed-crashes.json"
 # The plugin folder; resolve() follows a ~/.local/bin/machines link back here.
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 TIMEOUT = 45  # checkupdates and the AUR query hit the network
@@ -150,10 +157,13 @@ def seed_hosts():
 
 def ensure_files():
     """Create the settings folder and whichever of its files is missing, never
-    replacing one that exists. Returns the files it created."""
+    replacing one that exists, and an empty dismissed-crashes file: the widget
+    can only watch files that exist. Returns the files it created."""
     created = []
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    for path, text in ((HOSTS_FILE, seed_hosts), (CONFIG_FILE, (PLUGIN_DIR / "examples" / "config").read_text)):
+    DISMISSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    for path, text in ((HOSTS_FILE, seed_hosts), (CONFIG_FILE, (PLUGIN_DIR / "examples" / "config").read_text),
+                       (DISMISSED_FILE, lambda: "{}\n")):
         try:
             with open(path, "x") as f:
                 f.write(text())
@@ -221,6 +231,31 @@ def shell_path(path):
     if path.startswith("~/"):
         return '"$HOME"/' + shlex.quote(path[2:])
     return shlex.quote(path)
+
+
+def crash_id(crash):
+    return f"{crash.get('time')}-{crash.get('pid')}"
+
+
+def read_dismissed():
+    try:
+        data = json.loads(DISMISSED_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    return {k: set(v) for k, v in data.items() if isinstance(v, list)} if isinstance(data, dict) else {}
+
+
+def dismiss_crashes(label, ids):
+    """Add ids to label's dismissed crashes, dropping any older than the 7 days
+    the check looks back, so the file stays small."""
+    dismissed = read_dismissed()
+    dismissed.setdefault(label, set()).update(ids)
+    cutoff = (time.time() - 8 * 86400) * 1e6
+    kept = {k: sorted(i for i in v if int(i.split("-")[0]) >= cutoff) for k, v in dismissed.items()}
+    DISMISSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DISMISSED_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({k: v for k, v in kept.items() if v}, indent=2) + "\n")
+    tmp.replace(DISMISSED_FILE)
 
 
 # --- collecting ---------------------------------------------------------------
@@ -301,8 +336,10 @@ def duration(seconds):
     return f"{d}d {rem // 3600}h" if d else f"{rem // 3600}h {rem % 3600 // 60}m"
 
 
-def cells(m, config, details):
-    """(text, style) per column for one machine, appending (severity, line) to details."""
+def cells(m, config, details, dismissed=()):
+    """(text, style) per column for one machine, appending (severity, line) to
+    details, or (severity, line, extra issue fields). dismissed: crash ids to
+    leave out."""
     if "error" in m:
         details.append(("bad", m["error"]))
         return [(m["label"], "bold"), ("unreachable", "bad")] + [("", None)] * (len(headers(config)) - 2)
@@ -337,6 +374,7 @@ def cells(m, config, details):
         crashes = json.loads(m.get("crashes") or "[]")
     except json.JSONDecodeError:
         crashes = []
+    crashes = [c for c in crashes if isinstance(c, dict) and crash_id(c) not in dismissed]
     out.append((str(len(crashes)), "warn" if crashes else "dim"))
     if crashes:
         names = {}
@@ -344,7 +382,8 @@ def cells(m, config, details):
             exe = os.path.basename(c.get("exe") or str(c.get("pid")))
             names[exe] = names.get(exe, 0) + 1
         listed = ", ".join(f"{n} ×{k}" if k > 1 else n for n, k in names.items())
-        details.append(("warn", f"crashed in the last 7 days: {listed} (coredumpctl list)"))
+        details.append(("warn", f"crashed in the last 7 days: {listed} (coredumpctl list)",
+                        {"crashes": [crash_id(c) for c in crashes]}))
 
     if "AGENT" in headers(config):
         out.append(agent_cell(m))
@@ -393,19 +432,26 @@ def repo_cell(m, key, repo_path):
     return (" ".join([head[:7], ", ".join(issues)]).strip(), INFO if issues else "ok")
 
 
-def assess(m, config):
+def assess(m, config, dismissed=()):
     """The view of one machine shared by the table and --json (the bar widget):
-    display cells, detail lines, every issue with its severity, and a status."""
+    display cells, detail lines, every issue with its severity, the state of
+    each repo it has, and a status. Repos are never issues: being out of sync
+    is often work in progress."""
     details = []
-    row = cells(m, config, details)
-    issues = [{"severity": sev, "text": text} for sev, text in details]
+    row = cells(m, config, details, dismissed)
+    issues = [{"severity": d[0], "text": d[1], **(d[2] if len(d) > 2 else {})} for d in details]
+    repo_headers = {h for h, _ in repo_columns(config)}
     if "error" not in m:  # the error already says why every cell is empty
         issues += [{"severity": style, "text": f"{h.lower()}: {text}"}
                    for h, (text, style) in zip(headers(config), row)
-                   if (style in RANK or style == INFO) and h not in EXPLAINED]
+                   if style in RANK and h not in EXPLAINED and h not in repo_headers]
+    repos = [{"name": h.lower(), "status": style,
+              "text": text.partition(" ")[2] if style == INFO else "up to date"}
+             for h, (text, style) in zip(headers(config), row)
+             if h in repo_headers and style in ("ok", INFO)]
     worst = max((RANK.get(i["severity"], 0) for i in issues), default=0)
     status = "down" if "error" in m else {2: "bad", 1: "warn", 0: "ok"}[worst]
-    return {"cells": row, "details": details, "issues": issues, "status": status}
+    return {"cells": row, "details": details, "issues": issues, "repos": repos, "status": status}
 
 
 # --- rendering ----------------------------------------------------------------
@@ -420,9 +466,10 @@ def paint(text, style):
 
 def render(machines, config):
     cols = headers(config)
-    views = [assess(m, config) for m in machines]
+    dismissed = read_dismissed()
+    views = [assess(m, config, dismissed.get(m["label"], ())) for m in machines]
     rows = [v["cells"] for v in views]
-    details = [f"{m['label']}: {text}" for m, v in zip(machines, views) for _, text in v["details"]]
+    details = [f"{m['label']}: {d[1]}" for m, v in zip(machines, views) for d in v["details"]]
     widths = [max(len(h), *(len(r[i][0]) for r in rows)) for i, h in enumerate(cols)]
     print("  ".join(paint(h.ljust(w), "dim") for h, w in zip(cols, widths)).rstrip())
     for r in rows:
@@ -439,9 +486,10 @@ def render(machines, config):
 
 def json_report(machines, config):
     cols = headers(config)
+    dismissed = read_dismissed()
     for m in machines:
-        v = assess(m, config)
-        m["view"] = {"status": v["status"], "issues": v["issues"],
+        v = assess(m, config, dismissed.get(m["label"], ()))
+        m["view"] = {"status": v["status"], "issues": v["issues"], "repos": v["repos"],
                      "columns": {h: {"text": t, "style": st} for h, (t, st) in zip(cols, v["cells"])}}
     return json.dumps(machines, indent=2)
 
@@ -509,6 +557,13 @@ def main(argv):
             return 2
         cmd = editor_command(HOSTS_FILE if what == ["hosts"] else CONFIG_FILE, sys.stdin.isatty())
         os.execvp(cmd[0], cmd)
+    if "--dismiss-crashes" in argv:
+        label, *ids = argv[argv.index("--dismiss-crashes") + 1:] or [""]
+        if not label or not ids or not all(re.fullmatch(r"\d+-\d+", i) for i in ids):
+            print("machines: --dismiss-crashes takes a machine's label and crash ids (<time>-<pid>)", file=sys.stderr)
+            return 2
+        dismiss_crashes(label, ids)
+        return 0
     if "--setup-with-agent" in argv:
         if not shutil.which("omarchy-agent-prompt"):
             print("machines: --setup-with-agent needs Omarchy's `omarchy agent`", file=sys.stderr)
