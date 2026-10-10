@@ -1,29 +1,35 @@
 {
   "status": "passed",
-  "input_commit": "63dcaf2c45c00cc720a4b7af381e479474d2ca11",
-  "date": "2026-10-09",
+  "input_commit": "df3fce512016cb81b4b6385c3886f388e9a2072f",
+  "date": "2026-10-10",
   "platform": "Arch Linux x86_64, Hyprland 0.56.2, one 2560x1600 monitor at scale 2",
   "omarchy_version": "4.0.3-1",
   "commands": [
     "./tests/run",
-    "omarchy plugin validate .",
-    "omarchy plugin add <local clone> --enable --yes",
-    "qs ipc call io.github.frestina.machines open / close / refresh",
-    "omarchy-launch-floating-terminal-with-presentation <plugin>/bin/machines (right-click action)",
+    "omarchy plugin validate . (checkout and installed copy)",
+    "omarchy-plugin-test validate_plugin.py --json --security .",
+    "omarchy-plugin-release release_preflight.py on a fresh clone of https://github.com/Frestina/omarchy-machines",
+    "omarchy plugin add https://github.com/Frestina/omarchy-machines --enable, then Set up with agent",
     "omarchy plugin update io.github.frestina.machines --yes && omarchy restart shell",
-    "demo/run (fictional fixture preview)",
-    "omarchy plugin remove io.github.frestina.machines --yes; omarchy plugin add https://github.com/Frestina/omarchy-machines --enable --yes"
+    "qs ipc call io.github.frestina.machines open / close / refresh",
+    "omarchy plugin disable io.github.frestina.machines; omarchy plugin enable io.github.frestina.machines",
+    "OMARCHY_THEME_SKIP_BACKGROUND=1 omarchy-theme-set <theme> with hypr/ssh-border.lua loaded from hyprland.lua; ssh-class window border sampled with grim",
+    "Uninstall from the popup (bin/machines --uninstall)",
+    "bin/machines --uninstall in a scratch HOME with stand-ins for gum and omarchy-plugin-remove: cancel, failed plugin removal, remove everything"
   ],
   "results": [
-    "Installed from git and enabled into the bar without errors.",
-    "Popup listed four real machines, one local and three over ssh, with the optional agent and dotfiles checks configured.",
-    "Right-click table ran the bundled script from the plugin folder.",
-    "Update pulled the new commit; new QML loaded after omarchy restart shell.",
-    "Missing hosts file, unknown config key and unreachable host give explicit errors (unit and end-to-end tests).",
-    "preview.png captured from the installed widget showing only demo/fixtures data; the real cache was restored.",
-    "Remove unloaded the widget and kept ~/.config/machines; re-adding from the GitHub URL installed and loaded it again. CI passed on ubuntu-24.04."
+    "Both validators passed without errors or warnings; the advisory scan listed review items and no findings. The release preflight reported READY for this commit. CI passed on ubuntu-24.04.",
+    "Installed from the GitHub URL and enabled into the bar. Set up with agent wrote the hosts file and settings, the ~/.local/bin/machines link and the marked omarchy-machines block in hyprland.lua.",
+    "Popup listed four machines, one local and three over ssh, all OK, with the optional agent and repo checks configured. IPC refresh rewrote the cache; nothing in the plugin folder changed during a refresh, so the shell did not reload it.",
+    "The bar icon stays in full while remote machines are listed. The footer shows Machines and Settings on one line and Uninstall and Set up with agent on the next, inside the popup.",
+    "Disable removed the widget from the bar and its IPC target; enable put it back in the same place in the bar layout.",
+    "The ssh window border took the theme's yellow in stillwater and purple in kanagawa, whose own border is pale yellow; it changed on theme switch without a restart.",
+    "Uninstall from the popup (at c562bb9; this commit changes only how linked folders and a failed hyprland.lua write are handled) removed the plugin, ~/.config/omarchy-machines, ~/.cache/omarchy-machines, ~/.local/state/omarchy-machines, the ~/.local/bin/machines link and the hyprland.lua block, and left starship.toml untouched. Hyprland reported no config errors afterwards.",
+    "In the scratch HOME: cancel removed nothing; a failed plugin removal removed nothing else; a foreign ~/.local/bin/machines link and an unrelated org.omarchy.ssh rule survived; a config folder linked into dotfiles lost only the link; hyprland.lua was edited through its symlink."
   ],
   "limitations": [
-    "Tested on x86_64 with a horizontal bar on one monitor; vertical bars and several monitors were not re-tested for this release."
+    "Tested on x86_64 with a horizontal bar on one monitor; vertical bars and several monitors were not re-tested for this release.",
+    "The interactive gum menu of --uninstall was exercised once from the popup; the scripted cases used a stand-in that picks an option.",
+    "The ssh border colour was checked live in two themes; the pick for the other bundled themes was computed with plain lua, not seen on screen."
   ]
 }
