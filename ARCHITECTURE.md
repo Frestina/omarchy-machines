@@ -15,7 +15,10 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
   Optional checks receive their paths as shell-quoted variables ahead of the
   script (`REPOS=(…)` for the `repo` lines, numbered `repo0_…` in its
   report); `~/` expands on the far side. A repo's HEAD comes back from the far
-  side, so only a plain object id is passed to git here.
+  side, so only a plain object id is passed to git here. Behind and ahead
+  are measured against this machine's copy of the repo; when it has none, or
+  doesn't know that commit, the far side's own count from its last fetch is
+  used instead.
 - The far side only reports `key=value` facts. Fields that identify the machine
   (`label`, `target`, `local`) and the computed `error` and `view` always come
   from this side, so a machine cannot redirect the widget's ssh click.

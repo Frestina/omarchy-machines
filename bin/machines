@@ -123,6 +123,7 @@ for repo in "${REPOS[@]}"; do
 		kv "repo${i}_head" "$(git -C "$repo" rev-parse HEAD)"
 		kv "repo${i}_dirty" "$(git -C "$repo" status --porcelain | grep -c .)"
 		kv "repo${i}_unpushed" "$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+		kv "repo${i}_behind" "$(git -C "$repo" rev-list --count 'HEAD..@{u}' 2>/dev/null || echo '?')"
 	fi
 	i=$((i + 1))
 done
@@ -258,7 +259,9 @@ def collect_all(hosts, config):
 
 
 def repo_vs_upstream(sha, repo_path):
-    """How a machine's HEAD of a repo relates to the upstream branch as this machine last saw it."""
+    """How a machine's HEAD of a repo relates to the upstream branch as this
+    machine last saw it, or None when this machine has no copy that knows the
+    commit (a project that lives only on the other machine)."""
     repo = ["git", "-C", os.path.expanduser(repo_path)]
 
     def git(*args):
@@ -267,7 +270,7 @@ def repo_vs_upstream(sha, repo_path):
     # The sha comes from the far side; only a plain object id reaches git,
     # never something it could read as an option.
     if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) or git("cat-file", "-e", sha + "^{commit}").returncode:
-        return "unknown commit"
+        return None
     upstream = git("rev-parse", "@{u}").stdout.strip()
     if not upstream or sha == upstream:
         return "" if upstream else "no upstream branch"
@@ -375,7 +378,15 @@ def repo_cell(m, key, repo_path):
     unpushed, dirty = m.get(key + "unpushed", "?"), m.get(key + "dirty", "0")
     if unpushed not in ("0", "?"):
         issues.append(f"{unpushed} unpushed")
-    elif rel := repo_vs_upstream(head, repo_path):
+    elif (rel := repo_vs_upstream(head, repo_path)) is None:
+        # Not placeable here: fall back on how far behind the machine counts
+        # itself, as of its own last fetch.
+        behind = m.get(key + "behind", "?")
+        if unpushed == "?":
+            issues.append("no upstream branch")
+        elif behind.isdigit() and behind != "0":
+            issues.append(f"{behind} behind")
+    elif rel:
         issues.append(rel)
     if dirty != "0":
         issues.append(f"{dirty} uncommitted")

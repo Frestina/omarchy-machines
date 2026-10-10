@@ -251,8 +251,21 @@ class Repos(unittest.TestCase):
 
     def test_far_side_sha_never_reaches_git_as_an_option(self):
         with mock.patch("subprocess.run") as run:
-            self.assertEqual(machines.repo_vs_upstream("--output=/tmp/x", "~/dotfiles"), "unknown commit")
+            self.assertIsNone(machines.repo_vs_upstream("--output=/tmp/x", "~/dotfiles"))
         run.assert_not_called()
+
+    def test_repo_only_on_the_other_machine_counts_itself(self):
+        m = {**HEALTHY, "repo0_head": self.SHA, "repo0_dirty": "0", "repo0_unpushed": "0", "repo0_behind": "4"}
+        with mock.patch.object(machines, "repo_vs_upstream", return_value=None):
+            self.assertEqual(machines.repo_cell(m, "repo0_", "~/Projects/app"), ("aaaaaaa 4 behind", "info"))
+            self.assertEqual(machines.repo_cell({**m, "repo0_behind": "0"}, "repo0_", "~/Projects/app"), ("aaaaaaa", "ok"))
+            self.assertEqual(machines.repo_cell({**m, "repo0_unpushed": "?", "repo0_behind": "?"}, "repo0_", "~/app"),
+                             ("aaaaaaa no upstream branch", "info"))
+
+    def test_this_machines_copy_wins_when_it_knows_the_commit(self):
+        m = {**HEALTHY, "repo0_head": self.SHA, "repo0_dirty": "0", "repo0_unpushed": "0", "repo0_behind": "0"}
+        with mock.patch.object(machines, "repo_vs_upstream", return_value="2 behind"):
+            self.assertEqual(machines.repo_cell(m, "repo0_", "~/dotfiles"), ("aaaaaaa 2 behind", "info"))
 
 
 class Cache(ConfigDir):
