@@ -28,7 +28,7 @@ editor, and can hand the setup to your coding agent.
 | Updates | 50 or more pending, or the running kernel was upgraded and needs a reboot (pacman with `checkupdates`, `yay` for AUR, or apt) |
 | Failed units | any failed systemd unit, system or user |
 | Crashes | any core dump in the last 7 days (`coredumpctl`) |
-| Agent, dotfiles | optional, see [settings](#optional-settings) |
+| Agent, git repositories | optional, see [settings](#optional-settings) |
 
 A machine that cannot be reached within a few seconds shows as down with the
 ssh error.
@@ -88,7 +88,7 @@ front of a setting to turn it on. They are kept in
 | `ssh_options` | Extra options for the polling ssh connections, for example `-o IdentityAgent=none` to keep a password manager's agent from asking for approval on every check. |
 | `agent_socket` | Adds an AGENT column: whether this agent is running and unlocked on this machine. |
 | `forwarded_agent_socket` | On the other machines: whether an ssh session has forwarded your agent there right now. |
-| `dotfiles` | Adds a DOTFILES column comparing that git repository across machines: uncommitted and unpushed changes, and commits behind or ahead of its upstream. |
+| `repo` | Adds a column, named after the folder, comparing a git repository across machines: uncommitted and unpushed changes, and commits behind or ahead of its upstream. One line per repository; each needs the same path on every machine. `dotfiles = <path>` from earlier versions still works the same way. |
 
 The refresh interval (10 minutes by default) is a widget setting in the bar
 settings.

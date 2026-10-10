@@ -3,9 +3,8 @@
 
 Runs a small collector script on each machine (locally for this one, over ssh
 for the rest) and prints a table: uptime, load, memory, disk, pending updates,
-reboot needed, failed systemd units and crashes in the last 7 days. Two
-optional checks, an SSH agent and a dotfiles repository, are switched on in
-the config file.
+reboot needed, failed systemd units and crashes in the last 7 days. Optional
+checks, an SSH agent and git repositories, are switched on in the config file.
 
 Machines are listed in ~/.config/omarchy-machines/hosts, one per line:
 
@@ -20,7 +19,8 @@ Optional settings go in ~/.config/omarchy-machines/config as `key = value` lines
     ssh_options = -o IdentityAgent=none    extra options for polling ssh
     agent_socket = ~/.ssh/agent.sock       SSH agent to check on this machine
     forwarded_agent_socket = ~/.ssh/fwd.sock   agent to check on the others
-    dotfiles = ~/dotfiles                  git repo to compare across machines
+    repo = ~/dotfiles                      git repo to compare across machines;
+    repo = ~/Projects/app                  one line per repo, a column each
 
 Polling never forwards your agent and never prompts (BatchMode), so a machine
 that needs a password or key approval shows as unreachable.
@@ -51,6 +51,7 @@ guide in docs/AGENT_SETUP.md, to fill in the hosts file and settings with you.
 import fcntl
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -68,7 +69,7 @@ CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "
 # The plugin folder; resolve() follows a ~/.local/bin/machines link back here.
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 TIMEOUT = 45  # checkupdates and the AUR query hit the network
-CONFIG_KEYS = {"ssh_options", "agent_socket", "forwarded_agent_socket", "dotfiles"}
+CONFIG_KEYS = {"ssh_options", "agent_socket", "forwarded_agent_socket", "repo", "dotfiles"}
 
 COLLECTOR = r"""
 export LC_ALL=C
@@ -115,11 +116,16 @@ agent() {
 }
 [ -n "$AGENT_SOCK" ] && kv agent "$(agent "$AGENT_SOCK")"
 
-if [ -n "$DOTFILES" ] && [ -d "$DOTFILES/.git" ]; then
-	kv dot_head "$(git -C "$DOTFILES" rev-parse HEAD)"
-	kv dot_dirty "$(git -C "$DOTFILES" status --porcelain | grep -c .)"
-	kv dot_unpushed "$(git -C "$DOTFILES" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
-fi
+# Numbered like the config's repo lines. .git is a file in a worktree.
+i=0
+for repo in "${REPOS[@]}"; do
+	if [ -e "$repo/.git" ]; then
+		kv "repo${i}_head" "$(git -C "$repo" rev-parse HEAD)"
+		kv "repo${i}_dirty" "$(git -C "$repo" status --porcelain | grep -c .)"
+		kv "repo${i}_unpushed" "$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null || echo '?')"
+	fi
+	i=$((i + 1))
+done
 """
 
 BASE_SSH_OPTS = [
@@ -169,7 +175,10 @@ def read_hosts():
 
 
 def read_config():
+    """The settings as a dict; repo lines (and the older dotfiles key) gather
+    in order into config["repos"]."""
     config = {}
+    repos = []
     try:
         text = CONFIG_FILE.read_text()
     except FileNotFoundError:
@@ -181,8 +190,27 @@ def read_config():
         key, sep, value = (p.strip() for p in line.partition("="))
         if not sep or key not in CONFIG_KEYS:
             raise ValueError(f"{CONFIG_FILE}:{n}: expected one of {', '.join(sorted(CONFIG_KEYS))} = value")
-        config[key] = value
+        if key in ("repo", "dotfiles"):
+            if value not in repos:
+                repos.append(value)
+        else:
+            config[key] = value
+    if repos:
+        config["repos"] = repos
     return config
+
+
+def repo_columns(config):
+    """(header, path) per repo: its folder's name, with the parent folder's
+    when two repos share one or it is already a column's name."""
+    paths = config.get("repos", [])
+
+    def name(path, parts):
+        return "/".join(Path(path.rstrip("/")).parts[-parts:]).upper() or path
+
+    names = [name(p, 1) for p in paths]
+    return [(name(p, 2) if names.count(n) > 1 or n in BASE_HEADERS + ["AGENT"] else n, p)
+            for n, p in zip(names, paths)]
 
 
 def shell_path(path):
@@ -204,8 +232,8 @@ def is_local(host):
 def collect(host, config):
     local = is_local(host)
     sock = config.get("agent_socket" if local else "forwarded_agent_socket")
-    prelude = "".join(f"{name}={shell_path(value)}\n" for name, value in
-                      [("AGENT_SOCK", sock), ("DOTFILES", config.get("dotfiles"))] if value)
+    prelude = (f"AGENT_SOCK={shell_path(sock)}\n" if sock else "") + \
+        f"REPOS=({' '.join(shell_path(r) for r in config.get('repos', []))})\n"
     ssh = ["ssh", *BASE_SSH_OPTS, *shlex.split(config.get("ssh_options", "")), "--", host["target"]]
     cmd = ["bash", "-s"] if local else [*ssh, "bash", "-s"]
     try:
@@ -229,14 +257,16 @@ def collect_all(hosts, config):
         return list(pool.map(lambda h: collect(h, config), hosts))
 
 
-def dotfiles_vs_upstream(sha, repo_path):
-    """How a machine's dotfiles HEAD relates to the upstream branch as this machine last saw it."""
+def repo_vs_upstream(sha, repo_path):
+    """How a machine's HEAD of a repo relates to the upstream branch as this machine last saw it."""
     repo = ["git", "-C", os.path.expanduser(repo_path)]
 
     def git(*args):
         return subprocess.run(repo + list(args), capture_output=True, text=True)
 
-    if git("cat-file", "-e", sha + "^{commit}").returncode:
+    # The sha comes from the far side; only a plain object id reaches git,
+    # never something it could read as an option.
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) or git("cat-file", "-e", sha + "^{commit}").returncode:
         return "unknown commit"
     upstream = git("rev-parse", "@{u}").stdout.strip()
     if not upstream or sha == upstream:
@@ -257,7 +287,7 @@ RANK = {"bad": 2, "warn": 1}
 
 def headers(config):
     has_agent = "agent_socket" in config or "forwarded_agent_socket" in config
-    return BASE_HEADERS + (["AGENT"] if has_agent else []) + (["DOTFILES"] if "dotfiles" in config else [])
+    return BASE_HEADERS + (["AGENT"] if has_agent else []) + [h for h, _ in repo_columns(config)]
 
 
 def duration(seconds):
@@ -313,8 +343,8 @@ def cells(m, config, details):
     if "AGENT" in headers(config):
         out.append(agent_cell(m))
 
-    if "DOTFILES" in headers(config):
-        out.append(dotfiles_cell(m, config["dotfiles"]))
+    for i, (_, path) in enumerate(repo_columns(config)):
+        out.append(repo_cell(m, f"repo{i}_", path))
     return out
 
 
@@ -333,17 +363,20 @@ def agent_cell(m):
     return (f"{state} keys" + ("" if m["local"] else " fwd"), "ok")
 
 
-def dotfiles_cell(m, repo_path):
-    if "dot_head" not in m:
+def repo_cell(m, key, repo_path):
+    """One repo on one machine; key is the prefix of its facts (repo0_)."""
+    head = m.get(key + "head")
+    if head is None:
         return ("-", "dim")
     issues = []
-    if m["dot_unpushed"] not in ("0", "?"):
-        issues.append(f"{m['dot_unpushed']} unpushed")
-    elif rel := dotfiles_vs_upstream(m["dot_head"], repo_path):
+    unpushed, dirty = m.get(key + "unpushed", "?"), m.get(key + "dirty", "0")
+    if unpushed not in ("0", "?"):
+        issues.append(f"{unpushed} unpushed")
+    elif rel := repo_vs_upstream(head, repo_path):
         issues.append(rel)
-    if m["dot_dirty"] != "0":
-        issues.append(f"{m['dot_dirty']} uncommitted")
-    return (" ".join([m["dot_head"][:7], ", ".join(issues)]).strip(), "warn" if issues else "ok")
+    if dirty != "0":
+        issues.append(f"{dirty} uncommitted")
+    return (" ".join([head[:7], ", ".join(issues)]).strip(), "warn" if issues else "ok")
 
 
 def assess(m, config):

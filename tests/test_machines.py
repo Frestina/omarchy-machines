@@ -73,7 +73,11 @@ class HostsAndConfig(ConfigDir):
     def test_config_keys(self):
         (self.base / "config").write_text("# optional\ndotfiles = ~/dotfiles\nssh_options = -o IdentityAgent=none\n")
         self.assertEqual(machines.read_config(),
-                         {"dotfiles": "~/dotfiles", "ssh_options": "-o IdentityAgent=none"})
+                         {"repos": ["~/dotfiles"], "ssh_options": "-o IdentityAgent=none"})
+
+    def test_repos_gather_in_order(self):
+        (self.base / "config").write_text("repo = ~/dotfiles\nrepo = ~/Projects/app\ndotfiles = ~/dotfiles\n")
+        self.assertEqual(machines.read_config(), {"repos": ["~/dotfiles", "~/Projects/app"]})
 
     def test_unknown_config_key_is_an_error(self):
         (self.base / "config").write_text("colour = red\n")
@@ -109,7 +113,7 @@ class Collect(unittest.TestCase):
     def test_ssh_command(self):
         host = {"label": "desktop", "target": "desktop.lan", "hostname": None}
         config = {"ssh_options": "-o IdentityAgent=none", "forwarded_agent_socket": "~/fwd.sock",
-                  "agent_socket": "~/local.sock", "dotfiles": "~/dots"}
+                  "agent_socket": "~/local.sock", "repos": ["~/dots", "/srv/my app"]}
         with self.fake_run("hostname=desktop\n") as run:
             machines.collect(host, config)
         cmd = run.call_args.args[0]
@@ -120,7 +124,7 @@ class Collect(unittest.TestCase):
         self.assertIn("IdentityAgent=none", cmd[:cmd.index("--")])
         script = run.call_args.kwargs["input"]
         self.assertIn('AGENT_SOCK="$HOME"/fwd.sock\n', script)
-        self.assertIn('DOTFILES="$HOME"/dots\n', script)
+        self.assertIn('REPOS=("$HOME"/dots \'/srv/my app\')\n', script)
 
     def test_local_machine_runs_without_ssh(self):
         host = {"label": "here", "target": "local", "hostname": None}
@@ -173,7 +177,7 @@ class Assess(unittest.TestCase):
 
     def test_optional_columns_follow_config(self):
         self.assertEqual(machines.headers({}), machines.BASE_HEADERS)
-        self.assertEqual(machines.headers({"agent_socket": "x", "dotfiles": "y"})[-2:], ["AGENT", "DOTFILES"])
+        self.assertEqual(machines.headers({"agent_socket": "x", "repos": ["~/dotfiles"]})[-2:], ["AGENT", "DOTFILES"])
         v = self.status({"agent_socket": "x"}, local=True, agent="0")
         self.assertEqual(v["cells"][-1], ("locked (0 keys)", "warn"))
         self.assertEqual(v["status"], "warn")
@@ -222,6 +226,33 @@ class Actions(unittest.TestCase):
             self.assertEqual(machines.agent_command(), ["omarchy-menu", "summon", "setup.default.agent"])
 
 
+class Repos(unittest.TestCase):
+    SHA = "a" * 40
+
+    def test_columns_are_named_after_folders(self):
+        config = {"repos": ["~/dotfiles", "~/work/app", "~/play/app/", "~/load"]}
+        self.assertEqual([h for h, _ in machines.repo_columns(config)],
+                         ["DOTFILES", "WORK/APP", "PLAY/APP", "~/LOAD"])
+
+    def test_each_repo_has_its_own_cell(self):
+        config = {"repos": ["~/dotfiles", "~/Projects/app"]}
+        m = {**HEALTHY, "repo0_head": self.SHA, "repo0_dirty": "0", "repo0_unpushed": "0",
+             "repo1_head": self.SHA, "repo1_dirty": "2", "repo1_unpushed": "1"}
+        with mock.patch.object(machines, "repo_vs_upstream", return_value=""):
+            v = machines.assess(m, config)
+        self.assertEqual(v["cells"][-2:], [("aaaaaaa", "ok"), ("aaaaaaa 1 unpushed, 2 uncommitted", "warn")])
+        self.assertEqual(v["issues"], [{"severity": "warn", "text": "app: aaaaaaa 1 unpushed, 2 uncommitted"}])
+
+    def test_missing_repo_is_dim(self):
+        v = machines.assess({**HEALTHY, "repo1_head": self.SHA}, {"repos": ["~/a", "~/b"]})
+        self.assertEqual(v["cells"][-2], ("-", "dim"))
+
+    def test_far_side_sha_never_reaches_git_as_an_option(self):
+        with mock.patch("subprocess.run") as run:
+            self.assertEqual(machines.repo_vs_upstream("--output=/tmp/x", "~/dotfiles"), "unknown commit")
+        run.assert_not_called()
+
+
 class Cache(ConfigDir):
     def test_max_age_shares_one_collection(self):
         hosts = [{"label": "a", "target": "local", "hostname": None}]
@@ -266,6 +297,25 @@ class EndToEnd(unittest.TestCase):
         p = self.run_cli("--edit", "secrets", hosts="")
         self.assertEqual(p.returncode, 2)
         self.assertIn("hosts or config", p.stderr)
+
+    def test_repo_on_this_machine(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git = ["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com"]
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "start"], check=True)
+            Path(repo, "new").write_text("x")
+            with tempfile.TemporaryDirectory() as tmp:
+                os.makedirs(f"{tmp}/omarchy-machines")
+                Path(f"{tmp}/omarchy-machines/hosts").write_text("here local\n")
+                Path(f"{tmp}/omarchy-machines/config").write_text(f"repo = {repo}\n")
+                env = {**os.environ, "XDG_CONFIG_HOME": tmp, "XDG_CACHE_HOME": f"{tmp}/cache"}
+                p = subprocess.run([sys.executable, str(SCRIPT), "--json"], capture_output=True,
+                                   text=True, env=env, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        [m] = json.loads(p.stdout)
+        cell = m["view"]["columns"][Path(repo).name.upper()]
+        self.assertEqual(cell["style"], "warn")
+        self.assertTrue(cell["text"].endswith("no upstream branch, 1 uncommitted"), cell["text"])
 
     def test_local_json(self):
         p = self.run_cli("--json", hosts="here local\n")

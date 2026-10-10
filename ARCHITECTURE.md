@@ -13,7 +13,9 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
   machine, `ssh -T -o BatchMode=yes -o ConnectTimeout=4 -o ForwardAgent=no
   [ssh_options] -- <target> bash -s` for the others, with a 45 second deadline.
   Optional checks receive their paths as shell-quoted variables ahead of the
-  script; `~/` expands on the far side.
+  script (`REPOS=(…)` for the `repo` lines, numbered `repo0_…` in its
+  report); `~/` expands on the far side. A repo's HEAD comes back from the far
+  side, so only a plain object id is passed to git here.
 - The far side only reports `key=value` facts. Fields that identify the machine
   (`label`, `target`, `local`) and the computed `error` and `view` always come
   from this side, so a machine cannot redirect the widget's ssh click.
