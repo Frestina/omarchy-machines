@@ -1,3 +1,16 @@
+> [!IMPORTANT]
+> **This plugin is now [Fleetwatch](https://github.com/Frestina/omarchy-fleetwatch).**
+> This repository is archived and gets no updates. The name made it sound as
+> if only Omarchy machines could be watched; any Linux machine works.
+> Install Fleetwatch instead:
+>
+> ```bash
+> omarchy plugin add https://github.com/Frestina/omarchy-fleetwatch --enable
+> ```
+>
+> Fleetwatch keeps its settings in `~/.config/fleetwatch/`. To move yours,
+> copy `hosts` and `config` there from `~/.config/omarchy-machines/`.
+
 <h1 align="center">Machines</h1>
 
 <p align="center">See at a glance which of your machines needs attention: load, memory, disk, pending updates, failed units and crashes, checked locally and over ssh.</p>
