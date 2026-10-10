@@ -1,6 +1,6 @@
 {
   "status": "passed",
-  "input_commit": "df3fce512016cb81b4b6385c3886f388e9a2072f",
+  "input_commit": "9da2a7cf48b1700f15609913a9299350b65d5987",
   "date": "2026-10-10",
   "platform": "Arch Linux x86_64, Hyprland 0.56.2, one 2560x1600 monitor at scale 2",
   "omarchy_version": "4.0.3-1",
@@ -24,12 +24,14 @@
     "The bar icon stays in full while remote machines are listed. The footer shows Machines and Settings on one line and Uninstall and Set up with agent on the next, inside the popup.",
     "Disable removed the widget from the bar and its IPC target; enable put it back in the same place in the bar layout.",
     "The ssh window border took the theme's yellow in stillwater and purple in kanagawa, whose own border is pale yellow; it changed on theme switch without a restart.",
-    "Uninstall from the popup (at c562bb9; this commit changes only how linked folders and a failed hyprland.lua write are handled) removed the plugin, ~/.config/omarchy-machines, ~/.cache/omarchy-machines, ~/.local/state/omarchy-machines, the ~/.local/bin/machines link and the hyprland.lua block, and left starship.toml untouched. Hyprland reported no config errors afterwards.",
-    "In the scratch HOME: cancel removed nothing; a failed plugin removal removed nothing else; a foreign ~/.local/bin/machines link and an unrelated org.omarchy.ssh rule survived; a config folder linked into dotfiles lost only the link; hyprland.lua was edited through its symlink."
+    "Uninstall from the popup (at c562bb9; df3fce5 then changed only how linked folders and a failed hyprland.lua write are handled) removed the plugin, ~/.config/omarchy-machines, ~/.cache/omarchy-machines, ~/.local/state/omarchy-machines, the ~/.local/bin/machines link and the hyprland.lua block, and left starship.toml untouched. Hyprland reported no config errors afterwards.",
+    "In the scratch HOME: cancel removed nothing; a failed plugin removal removed nothing else; a foreign ~/.local/bin/machines link and an unrelated org.omarchy.ssh rule survived; a config folder linked into dotfiles lost only the link; hyprland.lua was edited through its symlink.",
+    "The live tests above ran on df3fce5. Between df3fce5 and this commit only .github/workflows changed (actions/checkout 7.0.1, actions/setup-node 7.1.0, actions/upload-artifact 7.0.1, each pinned commit checked against its tag), so the installed plugin files are identical. CI passed on the new pins."
   ],
   "limitations": [
     "Tested on x86_64 with a horizontal bar on one monitor; vertical bars and several monitors were not re-tested for this release.",
     "The interactive gum menu of --uninstall was exercised once from the popup; the scripted cases used a stand-in that picks an option.",
-    "The ssh border colour was checked live in two themes; the pick for the other bundled themes was computed with plain lua, not seen on screen."
+    "The ssh border colour was checked live in two themes; the pick for the other bundled themes was computed with plain lua, not seen on screen.",
+    "actions/upload-artifact 7.0.1 is used only by the Release source workflow, which had not run on the new pins when this was recorded."
   ]
 }
