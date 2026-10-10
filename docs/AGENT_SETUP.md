@@ -82,14 +82,15 @@ Comments in the file explain each one.
 8. Finish with a summary the user can keep:
    - What you changed, file by file.
    - That both settings files can be edited later from the widget's popup.
-   - What removing the plugin leaves behind, and how to delete it. Removing
-     it (`omarchy plugin remove io.github.frestina.machines`) leaves
-     `~/.config/omarchy-machines` and `~/.cache/omarchy-machines`, plus
-     everything from this session outside the plugin: the
-     `~/.local/bin/machines` link (delete it, or it points nowhere), the
-     `org.omarchy.ssh` rule in `hyprland.lua` (quote its comment line so it
-     can be found), and the starship change (which still works without the
-     plugin, so it can stay). List only what you actually made.
+   - How to remove it all: **Uninstall** at the bottom of the widget's popup
+     (or `bin/machines --uninstall`) asks first, then removes
+     `~/.config/omarchy-machines`, `~/.cache/omarchy-machines`,
+     `~/.local/state/omarchy-machines`, the `~/.local/bin/machines` link and
+     the `omarchy-machines` block in `hyprland.lua`, and removes the plugin.
+     It never touches `starship.toml`. If you changed it, tell the user that
+     undoing it is up to them: take `$hostname` back out of `format` if you
+     put it there, and delete the `[hostname]` tables. List only what you
+     actually made.
 
 ## The terminal command
 
@@ -121,19 +122,24 @@ Clicking a machine in the popup opens an ssh session in a terminal with the
 window class `org.omarchy.ssh`. Two optional additions make those sessions
 easy to tell apart from local ones. Explain both, and ask which the user wants.
 
-**A border of their own** for those windows, on this machine. Skip it if
-`~/.config/hypr/hyprland.lua` already has a rule for `org.omarchy.ssh`.
-Otherwise append, at the end of that file:
+**A border of their own** for those windows, on this machine, in a colour
+picked from their Omarchy theme. It follows them when they switch themes.
+Skip it if `~/.config/hypr/hyprland.lua` already has an `omarchy-machines`
+block. If it has an older `org.omarchy.ssh` rule with a fixed colour, offer to
+replace that rule and the comment above it with the block. Append, at the end
+of that file, exactly:
 
 ```lua
--- ssh sessions opened from the Machines bar widget: their own border colour
--- (active, then inactive) so a remote shell stands out.
-o.window("^org\\.omarchy\\.ssh$", { border_color = "rgb(e5c07b) rgba(e5c07b88)" })
+-- >>> omarchy-machines: ssh sessions from the Machines bar widget get a border
+-- colour from the current theme. `machines --uninstall` removes this block.
+pcall(dofile, os.getenv("HOME") .. "/.config/omarchy/plugins/io.github.frestina.machines/hypr/ssh-border.lua")
+-- <<< omarchy-machines
 ```
 
-Ask whether amber suits them; any colour works. Hyprland reloads the file
-when it is saved. Then run `hyprctl configerrors`, and if it reports a
-problem, undo your change and tell the user.
+Keep both marker lines as they are: uninstalling removes what is between
+them. Hyprland reloads the file when it is saved. Then run
+`hyprctl configerrors`, and if it reports a problem, undo your change and tell
+the user.
 
 **The machine's name in the prompt** over ssh, with starship. This shows on
 the machine being connected to, so here it helps when the user connects to
@@ -152,6 +158,8 @@ this machine from another one. Edit `~/.config/starship.toml` only if
   style = "bold yellow"
   ```
 
+- Keep `style` a colour name such as `yellow`: the user's terminal draws it
+  in their theme's colour. A hex colour would not follow theme switches.
 - If labels in the hosts file differ from hostnames, offer
   `[hostname.aliases]` (`<hostname> = "<label>"`) so the prompt uses the same
   names as the widget.

@@ -1,6 +1,7 @@
 # Architecture
 
 Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
+`hypr/ssh-border.lua` is an optional third, which runs inside Hyprland.
 
 ## `bin/machines` (Python 3, standard library only)
 
@@ -30,6 +31,31 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
   under an exclusive `flock`, so the widget's copies on several monitors share
   one collection. The cache's mtime is when its collection started.
 
+- `--uninstall` runs before the files are created. It lists what is there
+  (the three folders, `~/.local/bin/machines` when it links to this plugin,
+  the `-- >>> omarchy-machines` … `-- <<< omarchy-machines` block in
+  `hyprland.lua` or the earlier unmarked `org.omarchy.ssh` rule with its
+  comment). It asks with `gum choose` whether to remove all of it or only the
+  plugin, then runs `omarchy-plugin-remove --yes` first, so a running widget
+  can't create its files again. A start marker without an end is left
+  alone, and `hyprland.lua` is written through a symlink to the file it
+  points at. `starship.toml` is never edited: what we added there can't be
+  told apart from the user's own settings.
+
+## `hypr/ssh-border.lua` (optional, in Hyprland)
+
+- Loaded with `pcall(dofile, …)` from the user's `hyprland.lua`, so it does
+  nothing once the plugin is gone. Omarchy reloads Hyprland on a theme switch,
+  which runs it again.
+- Reads `~/.local/state/omarchy/current/theme/colors.toml`. Of yellow,
+  magenta, cyan, green, orange and blue (red would read as an error), it
+  picks the one with the largest OKLab distance from the theme's border
+  (`hyprland_active_border`, else `accent`, as in Omarchy's template), capped
+  by 1.5 × its distance from the background. Ties go to the earlier colour,
+  and the fallback is the earlier fixed amber. It applies
+  `o.window("^org\\.omarchy\\.ssh$", …)` only when `o` exists, so tests can
+  load it with plain `lua`.
+
 ## `Machines.qml` (bar widget)
 
 - One instance per monitor (`allowMultiple: false` per bar). Each runs the
@@ -43,7 +69,8 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
   `onRunningChanged`; exit code, JSON parsing and shape are checked separately
   and the last stderr line becomes the visible error.
 - The footer runs the script with `--edit hosts|config` (Omarchy's default
-  editor) or `--setup-with-agent` (`omarchy agent prompt` pointing at
+  editor), `--uninstall` (in a floating terminal, since it asks) or
+  `--setup-with-agent` (`omarchy agent prompt` pointing at
   `docs/AGENT_SETUP.md`, or Omarchy's agent picker when none is chosen). A
   `FileView` watches both files and the dismissed crashes; a save waits 500 ms
   for the editor to finish, then refreshes with `--since` the save, so every
@@ -60,7 +87,9 @@ Two parts with one rule: `bin/machines` decides, `Machines.qml` displays.
 - IPC target `io.github.frestina.machines`: `open`, `close`, `toggle`,
   `refresh`.
 
-Nothing runs with elevated privileges, nothing is installed outside the plugin
-folder, and removal leaves only `~/.config/omarchy-machines`,
-`~/.cache/omarchy-machines` and `~/.local/state/omarchy-machines`.
+Nothing runs with elevated privileges, and nothing is installed outside the
+plugin folder. `omarchy plugin remove` leaves only `~/.config/omarchy-machines`,
+`~/.cache/omarchy-machines`, `~/.local/state/omarchy-machines` and whatever the
+user or setup agent added; `--uninstall` removes all of that except the
+starship settings.
 Node.js is a development dependency for the repository checks only.

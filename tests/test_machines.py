@@ -4,6 +4,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -382,6 +383,125 @@ class EndToEnd(unittest.TestCase):
         self.assertNotIn("error", m)
         self.assertIn(m["view"]["status"], {"ok", "warn", "bad"})
         self.assertEqual(list(m["view"]["columns"]), machines.BASE_HEADERS)
+
+
+HYPR_BEFORE = """require("hypr.autostart")
+
+-- Add any other personal Hyprland configuration below.
+-- o.window("qemu", { workspace = "5" })
+"""
+
+
+class Uninstall(unittest.TestCase):
+    def test_marked_block_is_removed(self):
+        text = HYPR_BEFORE + """
+-- >>> omarchy-machines: ssh sessions from the Machines bar widget get a border
+-- colour from the current theme. `machines --uninstall` removes this block.
+pcall(dofile, os.getenv("HOME") .. "/x/hypr/ssh-border.lua")
+-- <<< omarchy-machines
+"""
+        self.assertEqual(machines.without_border_rule(text), HYPR_BEFORE)
+
+    def test_block_in_the_middle_keeps_what_follows(self):
+        text = "a\n\n-- >>> omarchy-machines\npcall(dofile, 'x')\n-- <<< omarchy-machines\n\nb\n"
+        self.assertEqual(machines.without_border_rule(text), "a\n\nb\n")
+
+    def test_earlier_rule_and_its_comment_are_removed(self):
+        text = HYPR_BEFORE + """
+-- ssh sessions opened from the Machines bar widget: their own border colour
+-- (active, then inactive) so a remote shell stands out.
+o.window("^org\\\\.omarchy\\\\.ssh$", { border_color = "rgb(61afef) rgba(61afef88)" })
+"""
+        self.assertEqual(machines.without_border_rule(text), HYPR_BEFORE)
+
+    def test_start_marker_without_end_is_left_alone(self):
+        text = HYPR_BEFORE + "-- >>> omarchy-machines\nhl.config({})\n"
+        self.assertIsNone(machines.without_border_rule(text))
+
+    def test_other_rules_for_the_class_are_left_alone(self):
+        text = HYPR_BEFORE + 'o.window("^org\\\\.omarchy\\\\.ssh$", { opacity = "1.0" })\n'
+        self.assertIsNone(machines.without_border_rule(text))
+
+    def test_link_only_when_it_points_at_this_plugin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            link = Path(tmp) / "machines"
+            link.symlink_to(machines.PLUGIN_DIR / "bin" / "machines")
+            self.assertTrue(machines.our_link(link))
+            link.unlink()
+            link.symlink_to(f"/home/x/.config/omarchy/plugins/{machines.PLUGIN_ID}/bin/machines")
+            self.assertTrue(machines.our_link(link), "a dangling link into the plugin is ours")
+            link.unlink()
+            link.symlink_to("/usr/bin/true")
+            self.assertFalse(machines.our_link(link))
+            link.unlink()
+            link.write_text("#!/bin/sh\n")
+            self.assertFalse(machines.our_link(link))
+
+    def test_write_in_place_keeps_the_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "dotfiles.lua"
+            real.write_text("old\n")
+            link = Path(tmp) / "hyprland.lua"
+            link.symlink_to(real)
+            machines.write_in_place(link, "new\n")
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(real.read_text(), "new\n")
+
+    def test_refuses_without_a_terminal(self):
+        p = subprocess.run([sys.executable, str(SCRIPT), "--uninstall"], capture_output=True,
+                           text=True, stdin=subprocess.DEVNULL, timeout=30)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("run it in a terminal", p.stderr)
+
+
+@unittest.skipUnless(shutil.which("lua"), "needs lua")
+class SshBorder(unittest.TestCase):
+    LUA = ROOT / "hypr" / "ssh-border.lua"
+
+    def border(self, colors_toml=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            arg = "nil"
+            if colors_toml is not None:
+                path = Path(tmp) / "colors.toml"
+                path.write_text(colors_toml)
+                arg = f"M.read_colors({json.dumps(str(path))})"
+            p = subprocess.run(["lua", "-e", f"M = dofile({json.dumps(str(self.LUA))}) print(M.border_color({arg}))"],
+                               capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout.strip()
+
+    THEME = """accent = "#89b4fa"
+background = "#1e1e2e"
+red = "#f38ba8"
+yellow = "#f9e2af"
+green = "#a6e3a1"
+cyan = "#94e2d5"
+blue = "#89b4fa"
+magenta = "#f5c2e7"
+"""
+
+    def test_picks_away_from_a_blue_border(self):
+        self.assertEqual(self.border(self.THEME), "rgb(f9e2af) rgba(f9e2af88)")
+
+    def test_avoids_a_yellow_border(self):
+        theme = self.THEME.replace('accent = "#89b4fa"', 'accent = "#f9e2af"')
+        self.assertNotIn("f9e2af", self.border(theme))
+
+    def test_hyprland_border_wins_over_accent(self):
+        theme = self.THEME + 'hyprland_active_border = "rgba(f9e2afee) rgba(f5c2e7ee) 45deg"\n'
+        self.assertNotIn("f9e2af", self.border(theme))
+
+    def test_never_red(self):
+        theme = "accent = \"#00ff00\"\nbackground = \"#000000\"\nred = \"#ff0000\"\ngreen = \"#00ff00\"\n"
+        self.assertEqual(self.border(theme), "rgb(00ff00) rgba(00ff0088)")
+
+    def test_ansi_only_theme(self):
+        theme = 'color0 = "#000000"\ncolor3 = "#ffff00"\naccent = "#0000ff"\n'
+        self.assertEqual(self.border(theme), "rgb(ffff00) rgba(ffff0088)")
+
+    def test_fallback_without_a_theme(self):
+        self.assertEqual(self.border(), "rgb(e5c07b) rgba(e5c07b88)")
+        self.assertEqual(self.border("mode = \"dark\"\n"), "rgb(e5c07b) rgba(e5c07b88)")
 
 
 if __name__ == "__main__":

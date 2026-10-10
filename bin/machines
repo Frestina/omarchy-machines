@@ -33,6 +33,7 @@ Usage: machines [--json [--max-age SECONDS | --since EPOCH]] [LABEL...]
        machines --edit hosts|config
        machines --setup-with-agent
        machines --dismiss-crashes LABEL ID...
+       machines --uninstall
 
 --json adds a "view" to each machine: its status (ok, warn, bad, down), the
 issues behind it and the table's display text. The bar widget shows that, so
@@ -51,6 +52,12 @@ crashes still show. Dismissals are kept on this machine only.
 
 --setup-with-agent starts your default coding agent (`omarchy agent`) with the
 guide in docs/AGENT_SETUP.md, to fill in the hosts file and settings with you.
+
+--uninstall lists what the plugin and its setup added, asks whether to remove
+all of it or only the plugin, and then runs `omarchy plugin remove`. It removes
+the three omarchy-machines folders, the ~/.local/bin/machines link when it
+points at this plugin, and the border rule in ~/.config/hypr/hyprland.lua. The
+starship prompt is never edited; remove the hostname there yourself.
 """
 
 import fcntl
@@ -75,6 +82,7 @@ CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "
 DISMISSED_FILE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "omarchy-machines" / "dismissed-crashes.json"
 # The plugin folder; resolve() follows a ~/.local/bin/machines link back here.
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
+PLUGIN_ID = "io.github.frestina.machines"
 TIMEOUT = 45  # checkupdates and the AUR query hit the network
 CONFIG_KEYS = {"ssh_options", "agent_socket", "forwarded_agent_socket", "repo", "dotfiles"}
 
@@ -541,10 +549,149 @@ def agent_command():
             f"Its command is {PLUGIN_DIR / 'bin' / 'machines'}."]
 
 
+# --- uninstall -----------------------------------------------------------------
+
+
+HYPR_FILE = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "hypr" / "hyprland.lua"
+LINK = Path.home() / ".local" / "bin" / "machines"
+# The setup guide wraps what it adds to hyprland.lua in these.
+BLOCK_START = "-- >>> omarchy-machines"
+BLOCK_END = "-- <<< omarchy-machines"
+# What setups before the markers added: the rule (any colour), and this
+# comment when it is right above it.
+LEGACY_COMMENT = [
+    "-- ssh sessions opened from the Machines bar widget: their own border colour",
+    "-- (active, then inactive) so a remote shell stands out.",
+]
+LEGACY_RULE = re.compile(r'o\.window\("\^org\\\\\.omarchy\\\\\.ssh\$", \{ border_color = "[^"]*" \}\)')
+
+
+def without_border_rule(text):
+    """hyprland.lua's text without what Machines added to it, or None when
+    nothing of ours is there. A start marker without its end is left alone."""
+    lines = text.splitlines()
+    kept, changed, i = [], False, 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith(BLOCK_START):
+            end = next((j for j in range(i + 1, len(lines)) if lines[j].strip().startswith(BLOCK_END)), None)
+            if end is not None:
+                i, changed = end + 1, True
+                continue
+        if LEGACY_RULE.fullmatch(line):
+            if [k.strip() for k in kept[-2:]] == LEGACY_COMMENT:
+                del kept[-2:]
+            i, changed = i + 1, True
+            continue
+        kept.append(lines[i])
+        i += 1
+    if not changed:
+        return None
+    # No run of blank lines where the block was, nor at the end.
+    tidy = []
+    for line in kept:
+        if line.strip() or (tidy and tidy[-1].strip()):
+            tidy.append(line)
+    return "\n".join(tidy).rstrip("\n") + "\n"
+
+
+def our_link(link=LINK):
+    """Whether `link` is a symlink to this plugin's command, wherever installed."""
+    if not link.is_symlink():
+        return False
+    target = os.path.normpath(link.parent / os.readlink(link))
+    return target == str(PLUGIN_DIR / "bin" / "machines") or target.endswith(f"/plugins/{PLUGIN_ID}/bin/machines")
+
+
+def tilde(path):
+    home = str(Path.home())
+    return "~" + str(path)[len(home):] if str(path).startswith(home + "/") else str(path)
+
+
+def write_in_place(path, text):
+    """Replace a file's contents; through a symlink, the file it points at."""
+    real = path.resolve()
+    tmp = real.with_name(f".{real.name}.machines-{os.getpid()}")
+    tmp.write_text(text)
+    shutil.copymode(real, tmp)
+    os.replace(tmp, real)
+
+
+def uninstall_plan():
+    """What the plugin and its setup left outside the plugin folder, as
+    (description, action) pairs."""
+    plan = []
+    for folder in (CONFIG_DIR, CACHE_DIR, DISMISSED_FILE.parent):
+        if folder.exists():
+            plan.append((f"{tilde(folder)}/", lambda folder=folder: shutil.rmtree(folder)))
+    if our_link():
+        plan.append((f"{tilde(LINK)}, the link to the `machines` command", LINK.unlink))
+    try:
+        text = without_border_rule(HYPR_FILE.read_text())
+    except OSError:
+        text = None
+    if text is not None:
+        where = tilde(HYPR_FILE) + (f" (-> {tilde(HYPR_FILE.resolve())})" if HYPR_FILE.is_symlink() else "")
+        plan.append((f"the ssh border rule in {where}", lambda: write_in_place(HYPR_FILE, text)))
+    return plan
+
+
+def ask(options):
+    """One of `options`, or None when cancelled."""
+    if shutil.which("gum"):
+        r = subprocess.run(["gum", "choose", *options], stdout=subprocess.PIPE, text=True)
+        return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+    for n, option in enumerate(options, 1):
+        print(f"  {n}) {option}")
+    try:
+        answer = input("> ").strip()
+    except EOFError:
+        return None
+    return options[int(answer) - 1] if answer.isdigit() and 0 < int(answer) <= len(options) else None
+
+
+def uninstall():
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("machines: --uninstall asks before removing anything; run it in a terminal", file=sys.stderr)
+        return 2
+    plan = uninstall_plan()
+    everything, plugin_only = "Remove the plugin and all of this", "Remove only the plugin"
+    print("Uninstall Machines\n")
+    if plan:
+        print("Besides the plugin, Machines and its setup added:\n")
+        for description, _ in plan:
+            print(f"  - {description}")
+        print()
+        choice = ask([everything, plugin_only, "Cancel"])
+    else:
+        print("Nothing besides the plugin needs removing.\n")
+        choice = ask([plugin_only, "Cancel"])
+    if choice not in (everything, plugin_only):
+        print("Nothing removed.")
+        return 1
+    # The plugin goes first: a running widget would create its files again.
+    if subprocess.run(["omarchy-plugin-remove", PLUGIN_ID, "--yes"]).returncode != 0:
+        print("machines: the plugin was not removed, so nothing else was either", file=sys.stderr)
+        return 1
+    if choice == everything:
+        for description, action in plan:
+            try:
+                action()
+                print(f"Removed {description}.")
+            except OSError as e:
+                print(f"machines: could not remove {description}: {e.strerror}", file=sys.stderr)
+    print("\nThe machine's name in your starship prompt, if you added it, is left as it is.")
+    print("To remove it, see Remove in https://github.com/Frestina/omarchy-machines#remove")
+    return 0
+
+
 def main(argv):
     if "-h" in argv or "--help" in argv:
         print(__doc__.strip())
         return 0
+    # Before ensure_files(), which would create the folders it removes.
+    if "--uninstall" in argv:
+        return uninstall()
     try:
         ensure_files()
     except OSError as e:

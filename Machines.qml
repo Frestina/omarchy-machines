@@ -11,8 +11,8 @@ import qs.Ui
 //
 // left = popup · middle = refresh now · right = full table in a terminal.
 // Clicking a machine in the popup opens an ssh session to it. The popup's
-// footer edits the hosts file and settings, or hands the setup to an agent;
-// saving either file checks again.
+// footer edits the hosts file and settings, hands the setup to an agent, or
+// uninstalls; saving either file checks again.
 Panel {
   id: root
   moduleName: "io.github.frestina.machines"
@@ -38,6 +38,8 @@ Panel {
   readonly property string dismissedFile: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy-machines/dismissed-crashes.json"
   readonly property int refreshSec: Math.max(60, Number(setting("refreshIntervalSec", 600)) || 600)
 
+  // At least one machine is checked over ssh.
+  readonly property bool hasRemote: machines.some(function(m) { return !m.local })
   // Nothing listed yet but the machine this runs on.
   readonly property bool onlyThisMachine: error === "" && machines.length > 0 && machines.every(function(m) { return m.local })
   // When the hosts file, settings or dismissed crashes were saved (Unix
@@ -139,6 +141,12 @@ Panel {
     if (!root.bar) return
     root.close()
     root.bar.run([root.command].concat(args).map(Util.shellQuote).join(" "))
+  }
+
+  function uninstall() {
+    if (!root.bar) return
+    root.close()
+    root.bar.run("omarchy-launch-floating-terminal-with-presentation " + Util.shellQuote(Util.shellQuote(root.command) + " --uninstall"))
   }
 
   // The popup stays open: the dismissed file's watcher checks again, and the
@@ -260,7 +268,8 @@ Panel {
     text: root.needAttention.length > 0 && !vertical ? "󰒋 " + root.needAttention.length : "󰒋"
     slotSize: Style.bar.iconSlot * (root.needAttention.length > 0 && !vertical ? 1.6 : 1)
     active: root.urgent
-    dimmed: !root.urgent && root.needAttention.length === 0 && root.error === ""
+    // Dim while only this machine is listed; with others it stays in full.
+    dimmed: !root.hasRemote && !root.urgent && root.needAttention.length === 0 && root.error === ""
     tooltipText: root.opened ? "" : root.tooltipText
     onPressed: function(b) {
       if (b === Qt.RightButton) root.openTable()
@@ -490,7 +499,7 @@ Panel {
         }
 
         Text {
-          visible: root.machines.some(function(m) { return !m.local })
+          visible: root.hasRemote
           width: parent.width
           textFormat: Text.PlainText
           text: "Click a machine to ssh in"
@@ -537,6 +546,16 @@ Panel {
             fontFamily: root.bar.fontFamily
             fontSize: Style.font.bodySmall
             onClicked: root.runCommand(["--edit", "config"])
+          }
+
+          // Asks in a terminal what to remove before it removes anything.
+          Button {
+            iconText: "󰆴"
+            tooltipText: "Uninstall Machines…"
+            foreground: root.barForeground
+            fontFamily: root.bar.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.uninstall()
           }
 
           Item { Layout.fillWidth: true }

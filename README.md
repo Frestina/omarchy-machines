@@ -6,9 +6,9 @@
 
 <p align="center"><img alt="The Machines popup listing four machines: one fine, one needing a reboot, one with a full disk and a failed unit, one unreachable" src="preview.png" width="400"></p>
 
-A bar icon that stays dim while everything is fine, shows a count when a
-machine needs attention and turns urgent when one is in trouble or
-unreachable. It comes with a `machines` command that prints the same check as
+A bar icon that shows a count when a machine needs attention and turns urgent
+when one is in trouble or unreachable. It stays dim until you add machines
+besides the one you are on. It comes with a `machines` command that prints the same check as
 a table in the terminal.
 
 - **Left-click:** a popup with one row per machine and the issues behind its
@@ -17,7 +17,7 @@ a table in the terminal.
 - **Right-click:** the full table in a floating terminal.
 
 The bottom of the popup opens your list of machines and the settings in your
-editor, and can hand the setup to your coding agent.
+editor, can hand the setup to your coding agent, and uninstalls the plugin.
 
 ## What it checks
 
@@ -35,7 +35,12 @@ ssh error.
 
 ## Requirements
 
-- Omarchy 4 with Python 3 (included in Omarchy).
+- Omarchy 4.
+- Python 3, which comes with Omarchy.
+- Starship, only for the machine's name in the prompt in
+  [Know where you are](#know-where-you-are). Starship is Omarchy's default
+  prompt; if you have switched to another one, show the hostname over ssh
+  in that prompt instead.
 - The machines you list: Linux with `bash`, reachable with `ssh <target>` using
   a key, without any password prompt. The check never prompts, so a machine
   that asks for a password shows as unreachable.
@@ -100,11 +105,22 @@ The popup opens ssh sessions in a terminal with the window class
 from local ones. **Set up with agent** offers to make both for you, or add them
 yourself:
 
-Give them their own border, in `~/.config/hypr/hyprland.lua`:
+Give them their own border. Add this at the end of
+`~/.config/hypr/hyprland.lua`:
 
 ```lua
-o.window("^org\\.omarchy\\.ssh$", { border_color = "rgb(e5c07b) rgba(e5c07b88)" })
+-- >>> omarchy-machines: ssh sessions from the Machines bar widget get a border
+-- colour from the current theme. `machines --uninstall` removes this block.
+pcall(dofile, os.getenv("HOME") .. "/.config/omarchy/plugins/io.github.frestina.machines/hypr/ssh-border.lua")
+-- <<< omarchy-machines
 ```
+
+The plugin's [hypr/ssh-border.lua](hypr/ssh-border.lua) picks the colour
+from your theme. Of the theme's colours it takes the one that looks most
+different from the theme's own window border, and is still clear on its
+background. It never picks red, so the border can't be mistaken for an
+error. Omarchy reloads Hyprland when you switch themes, so the border
+follows the new theme. Once the plugin is removed, the line does nothing.
 
 Show the machine's name in the prompt over ssh with starship, on each machine
 you connect to. In its `~/.config/starship.toml`, add `$hostname` at the start
@@ -115,6 +131,11 @@ of `format` (Omarchy's default `format` leaves it out), then:
 ssh_only = true
 style = "bold yellow"
 ```
+
+A colour name like `yellow` follows your theme too: the prompt is drawn by
+your own terminal, which Omarchy recolours with the theme. It can't follow
+the border's pick, because it is set on the machine you connect to. So in
+themes where the border takes another colour, the two differ.
 
 ## What it runs and stores
 
@@ -129,6 +150,8 @@ style = "bold yellow"
 - Crashes you dismiss are remembered in
   `~/.local/state/omarchy-machines/dismissed-crashes.json`, on the machine you
   dismissed them from.
+- **Uninstall** removes only what is listed under [Remove](#remove), after
+  asking.
 - Your machine list and settings stay in `~/.config/omarchy-machines/` on your
   machine; nothing is sent anywhere else.
 - **Set up with agent** runs `omarchy agent` with your default coding agent,
@@ -146,23 +169,47 @@ updates without it.
 
 ## Remove
 
+Choose **Uninstall** (the bin icon at the bottom of the popup), or run:
+
 ```bash
-omarchy plugin remove io.github.frestina.machines
+~/.config/omarchy/plugins/io.github.frestina.machines/bin/machines --uninstall
 ```
 
-Your settings and cache are left in place. Delete them with:
+It lists what the plugin and its setup left on this machine, and asks whether
+to remove all of it or only the plugin:
+
+- `~/.config/omarchy-machines`, `~/.cache/omarchy-machines` and
+  `~/.local/state/omarchy-machines`
+- the `~/.local/bin/machines` link, if it points at this plugin
+- the [Know where you are](#know-where-you-are) border in
+  `~/.config/hypr/hyprland.lua`. Only the block between the
+  `omarchy-machines` markers is removed, or the `org.omarchy.ssh` rule that
+  earlier versions added.
+
+Then it runs `omarchy plugin remove`.
+
+**It never touches the starship prompt.** Your `starship.toml` may hold
+settings of your own in the same places, so it is up to you. The machine's
+name in the prompt works without the plugin and can stay. To remove it, edit
+`~/.config/starship.toml` on each machine where you added it: take `$hostname`
+out of `format`, and delete the `[hostname]` table, along with
+`[hostname.aliases]` if you have one. If the file had no `format` before,
+starship's default shows the hostname over ssh on its own, so delete only the
+`[hostname]` tables.
+
+### Removing by hand
+
+`omarchy plugin remove io.github.frestina.machines`, or removing the plugin
+from the Omarchy menu, deletes only the plugin folder. Delete the rest
+yourself:
 
 ```bash
 rm -r ~/.config/omarchy-machines ~/.cache/omarchy-machines ~/.local/state/omarchy-machines
+rm ~/.local/bin/machines   # if you linked the command
 ```
 
-Anything you or the setup agent added outside the plugin stays too:
-
-- If you added the `machines` command to your terminal, also delete
-  `~/.local/bin/machines`.
-- If you added the [Know where you are](#know-where-you-are) border, remove
-  the `org.omarchy.ssh` rule from `~/.config/hypr/hyprland.lua`. The machine's
-  name in the starship prompt can stay; it works without the plugin.
+Then remove the `omarchy-machines` block (or the `org.omarchy.ssh` rule)
+from `~/.config/hypr/hyprland.lua`, and the starship settings as above.
 
 ## Development
 
