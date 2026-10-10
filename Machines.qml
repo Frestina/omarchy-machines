@@ -523,7 +523,7 @@ Panel {
 
         PanelSeparator { foreground: root.barForeground }
 
-        // ---------- Footer: the two files, then uninstall · agent setup ----------
+        // ---------- Footer: the two files, then uninstall · agent setup, each split left and right ----------
         RowLayout {
           width: parent.width
           spacing: Style.space(4)
@@ -538,6 +538,8 @@ Panel {
             onClicked: root.runCommand(["--edit", "hosts"])
           }
 
+          Item { Layout.fillWidth: true }
+
           Button {
             iconText: "󰒓"
             text: "Settings"
@@ -547,8 +549,6 @@ Panel {
             fontSize: Style.font.bodySmall
             onClicked: root.runCommand(["--edit", "config"])
           }
-
-          Item { Layout.fillWidth: true }
         }
 
         RowLayout {
